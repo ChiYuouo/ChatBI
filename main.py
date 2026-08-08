@@ -15,7 +15,15 @@ class ChatBISystem:
         self.db = DatabaseClient()
         self.formatter = ResultFormatter()
 
-    def run(self, user_question: str, use_few_shot: bool = True) -> dict:
+    def run(self,
+            user_question: str,
+            use_few_shot: bool = True,
+            user_rules: bool = True,
+            user_guards: bool = True,
+            user_indicator_knowledge: bool = True,
+            user_schema_linking: bool = False,
+            user_indicator_rag: bool = False,
+            ) -> dict:
         """运行完整链路"""
 
         # 1. 解析问题
@@ -24,7 +32,7 @@ class ChatBISystem:
             return {"success": False,"error": "输入问题无效"}
 
         # 2. 构造 Prompt
-        system_msg, prompt = build_prompt(user_question, use_few_shot)
+        system_msg, prompt = build_prompt(user_question, use_few_shot, user_rules, user_guards, user_indicator_knowledge,)
 
         # 3. 生成 SQL
         sql = self.llm.generate_sql(system_msg, prompt)

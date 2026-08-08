@@ -5,6 +5,8 @@ Schema 和示例在此集中维护，便于后续课程中动态扩展。
 第 7 课增强：新增 RULES（业务规则注入层）与 ERROR_GUARDS（错误防护层），
 通过 build_prompt 的可选参数控制是否注入，实现 Prompt 策略的灵活切换。
 """
+from indicator_knowledge import IndicatorKnowledge
+
 
 
 # ==================== Schema 定义 ====================
@@ -126,14 +128,15 @@ ERROR_GUARDS = """
 - 聚合维度：GROUP BY 字段必须与 SELECT 中的非聚合字段完全一致
 """
 
-
+_indicator_knowledge = IndicatorKnowledge()
 # ==================== Prompt 构造函数 ====================
 
 def build_prompt(
     user_question: str,
     use_few_shot: bool = True,
     use_rules: bool = False,
-    use_guards: bool = False
+    use_guards: bool = False,
+    use_indicators: bool = False  #新增：控制是否注入指标知识
 ) -> tuple[str, str]:
     """
     构造发送给 LLM 的 Prompt
@@ -146,6 +149,7 @@ def build_prompt(
 
     Returns:
         (system_message, user_message)
+        :param use_indicators:
     """
 
     system_msg = "你是一个专业的 SQL 生成助手，擅长根据业务问题生成标准 MySQL 查询语句。"
@@ -161,6 +165,11 @@ def build_prompt(
         prompt += f"""
 {RULES}
 """
+    if use_indicators:
+        knowledge_block =_indicator_knowledge.build_knowledge_block(user_question)
+    if knowledge_block:
+        prompt += f"""
+    {knowledge_block}"""
 
     if use_few_shot:
         prompt += f"""

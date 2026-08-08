@@ -427,7 +427,7 @@ def run_evaluation(
         test_cases_path
     )
 
-    cases = cases[:1]
+    cases = cases[-2:]
 
     results = evaluator.evaluate_all(
         cases,
@@ -452,7 +452,8 @@ if __name__ == "__main__":
         system_msg, prompt = build_prompt(
             question,
             use_rules=True,
-            use_guards=True
+            use_guards=True,
+            use_indicators = True  # 启用指标知识注入
         )
 
         return llm.generate_sql(

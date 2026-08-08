@@ -61,5 +61,19 @@
     "question": "查询上个月的销售额、销售成本及毛利",
     "expected_sql": "SELECT SUM(o.net_amount) AS revenue, SUM((p.material_cost + p.labor_cost) * o.quantity) AS cost, SUM(o.net_amount) - SUM((p.material_cost + p.labor_cost) * o.quantity) AS gross_profit FROM sales_orders o JOIN dim_products p ON o.product_id = p.product_id WHERE o.order_status = 'completed' AND o.order_date >= DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 MONTH), '%Y-%m-01') AND o.order_date < DATE_FORMAT(CURDATE(), '%Y-%m-01')",
     "description": "两表 Join+复杂计算字段+动态时间边界+多指标聚合"
+  },
+  {
+    "id": "I01",
+    "category": "complex",
+    "question": "查询上个月的毛利",
+    "expected_sql": "SELECT SUM(o.net_amount * r.rate_to_cny) - SUM((p.material_cost + p.labor_cost) * o.quantity) AS gross_profit FROM sales_orders o JOIN dim_products p ON o.product_id = p.product_id JOIN exchange_rates r ON o.order_date = r.rate_date AND o.currency = r.currency WHERE o.order_status = 'completed' AND o.order_date >= DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 MONTH), '%Y-%m-01') AND o.order_date < DATE_FORMAT(CURDATE(), '%Y-%m-01')",
+    "description": "毛利计算：收入-成本，需三表 Join+汇率转换+动态时间"
+  },
+  {
+    "id": "I02",
+    "category": "complex",
+    "question": "查询上个月的利润",
+    "expected_sql": "SELECT (SUM(o.net_amount * r.rate_to_cny) - SUM((p.material_cost + p.labor_cost) * o.quantity)) - (SELECT SUM(rd_expense + selling_expense + admin_expense + finance_expense) FROM finance_expenses WHERE expense_date >= DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 MONTH), '%Y-%m-01') AND expense_date < DATE_FORMAT(CURDATE(), '%Y-%m-01')) AS profit FROM sales_orders o JOIN dim_products p ON o.product_id = p.product_id JOIN exchange_rates r ON o.order_date = r.rate_date AND o.currency = r.currency WHERE o.order_status = 'completed' AND o.order_date >= DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 MONTH), '%Y-%m-01') AND o.order_date < DATE_FORMAT(CURDATE(), '%Y-%m-01')",
+    "description": "利润计算：毛利-期间费用，需跨四表+子查询+时间对齐"
   }
 ]
