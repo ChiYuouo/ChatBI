@@ -1,15 +1,19 @@
 import sys
+
+from config import LLM_CONFIG
 from query_parser import QueryParser
 from prompt_builder import build_prompt
 from llm_client import LLMClient
 from database import DatabaseClient
 from result_formatter import ResultFormatter
+from indicator_knowledge import IndicatorKnowledge
 
 
 class ChatBISystem:
     """ChatBI 系统主类"""
 
     def __init__(self):
+        self.indicator_knowledge = IndicatorKnowledge()
         self.parser = QueryParser()
         self.llm = LLMClient()
         self.db = DatabaseClient()
@@ -18,44 +22,89 @@ class ChatBISystem:
     def run(self,
             user_question: str,
             use_few_shot: bool = True,
-            user_rules: bool = True,
-            user_guards: bool = True,
-            user_indicator_knowledge: bool = True,
-            user_schema_linking: bool = False,
-            user_indicator_rag: bool = False,
+            use_rules: bool = True,
+            use_guards: bool = True,
+            use_indicator_knowledge: bool = True,
+            use_schema_linking: bool = False,
+            use_indicator_rag: bool = False,
             ) -> dict:
-        """运行完整链路"""
-
+        """
+        运行完整链路
+            Args:
+            user_question: 用户自然语言问题
+            use_few_shot: 是否使用 Few-shot
+            use_rules: 是否启用业务规则
+            use_guards: 是否启用错误防护
+            use_indicator_knowledge: 是否启用指标知识注入
+            Returns:
+            包含 SQL、结果或错误信息的字典
+        """
         # 1. 解析问题
         parsed = self.parser.parse(user_question)
         if not self.parser.validate(parsed):
-            return {"success": False,"error": "输入问题无效"}
+            return {"success": False,"error": "输入问题无效","error_type":"validation"}
 
         # 2. 构造 Prompt
-        system_msg, prompt = build_prompt(user_question, use_few_shot, user_rules, user_guards, user_indicator_knowledge,)
+        detected_indicators = []
+        indicator_block = ""
+        if use_indicator_knowledge:
+            detected_indicators =self.indicator_knowledge.detect_indicators(user_question)
+            indicator_block =self.indicator_knowledge.build_knowledge_block(user_question)
+        system_msg, prompt = build_prompt(user_question,use_few_shot=use_few_shot,use_rules=use_rules,use_guards=use_guards,indicator_knowledge=indicator_block)
+
 
         # 3. 生成 SQL
-        sql = self.llm.generate_sql(system_msg, prompt)
+        try:
+            sql = self.llm.generate_sql(system_msg, prompt)
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+                "error_type": "llm",
+                "metadata": {
+                    "detected_indicators": detected_indicators,
+                    "model": LLM_CONFIG["model"],
+                    "used_rules": use_rules,
+                    "used_guards": use_guards,
+                    "used_indicator_knowledge": use_indicator_knowledge,
+                }
+            }
 
         # 4. 执行 SQL
         try:
             columns, results = self.db.execute(sql)
             formatted = self.formatter.format(columns, results)
-
             return {
-                "success": True,
-                "sql": sql,
-                "columns": columns,
-                "results": results,
-                "formatted": formatted
+            "success": True,
+            "sql": sql,
+            "columns": columns,
+            "results": results,
+            "formatted": formatted,
+            "metadata": {
+                "detected_indicators": detected_indicators,
+                "model": LLM_CONFIG["model"],
+                "used_few_shot": use_few_shot,
+                "used_rules": use_rules,
+                "used_guards": use_guards,
+                "used_indicator_knowledge": use_indicator_knowledge,
+                "row_count": len(results),
+                }
             }
-
         except Exception as e:
             return {
-                "success": False,
-                "sql": sql,
-                "error": str(e)
+            "success": False,
+            "sql": sql,
+            "error": str(e),
+            "error_type": "database",
+            "metadata": {
+                "detected_indicators": detected_indicators,
+                "model": LLM_CONFIG["model"],
+                "used_few_shot": use_few_shot,
+                "used_rules": use_rules,
+                "used_guards": use_guards,
+                "used_indicator_knowledge": use_indicator_knowledge,
             }
+        }
 
 
 def main():

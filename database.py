@@ -20,7 +20,7 @@ class DatabaseClient:
 
         return []
 
-    def validate(self)->bool:
+    def validate_connection(self)->bool:
         """验证当前数据库连接是否正常"""
         try:
             conn= pymysql.connect(**self.config)
@@ -31,6 +31,6 @@ class DatabaseClient:
 
 if __name__ == "__main__":
     db = DatabaseClient()
-    print("数据库连接状态：",db.validate())
+    print("数据库连接状态：",db.validate_connection())
     result = db.execute('select * from sales_orders')
     print(result)

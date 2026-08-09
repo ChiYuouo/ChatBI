@@ -136,7 +136,7 @@ def build_prompt(
     use_few_shot: bool = True,
     use_rules: bool = False,
     use_guards: bool = False,
-    use_indicators: bool = False  #新增：控制是否注入指标知识
+    indicator_knowledge:  bool = False
 ) -> tuple[str, str]:
     """
     构造发送给 LLM 的 Prompt
@@ -146,7 +146,7 @@ def build_prompt(
         use_few_shot: 是否使用 Few-shot 示例
         use_rules: 是否注入业务规则层（第 7 课新增）
         use_guards: 是否注入错误防护层（第 7 课新增）
-
+        indicator_knowledge: 指标知识文本块
     Returns:
         (system_message, user_message)
         :param use_indicators:
@@ -165,11 +165,6 @@ def build_prompt(
         prompt += f"""
 {RULES}
 """
-    if use_indicators:
-        knowledge_block =_indicator_knowledge.build_knowledge_block(user_question)
-    if knowledge_block:
-        prompt += f"""
-    {knowledge_block}"""
 
     if use_few_shot:
         prompt += f"""
@@ -181,6 +176,11 @@ def build_prompt(
         prompt += f"""
 {ERROR_GUARDS}
 """
+
+    if indicator_knowledge:
+        prompt += f"""
+    {indicator_knowledge}
+    """
 
     prompt += f"""
 【用户问题】
