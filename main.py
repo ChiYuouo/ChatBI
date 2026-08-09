@@ -1,5 +1,6 @@
 import re
 import sys
+from decimal import Decimal
 from typing import Generator
 
 from config import LLM_CONFIG
@@ -45,16 +46,16 @@ class ChatBISystem:
         # 1. 解析问题
         parsed = self.parser.parse(user_question)
         if not self.parser.validate(parsed):
-            return {"success": False,"error": "输入问题无效","error_type":"validation"}
+            return {"success": False, "error": "输入问题无效", "error_type": "validation"}
 
         # 2. 构造 Prompt
         detected_indicators = []
         indicator_block = ""
         if use_indicator_knowledge:
-            detected_indicators =self.indicator_knowledge.detect_indicators(user_question)
-            indicator_block =self.indicator_knowledge.build_knowledge_block(user_question)
-        system_msg, prompt = build_prompt(user_question,use_few_shot=use_few_shot,use_rules=use_rules,use_guards=use_guards,indicator_knowledge=indicator_block)
-
+            detected_indicators = self.indicator_knowledge.detect_indicators(user_question)
+            indicator_block = self.indicator_knowledge.build_knowledge_block(user_question)
+        system_msg, prompt = build_prompt(user_question, use_few_shot=use_few_shot, use_rules=use_rules,
+                                          use_guards=use_guards, indicator_knowledge=indicator_block)
 
         # 3. 生成 SQL
         try:
@@ -78,40 +79,46 @@ class ChatBISystem:
             columns, results = self.db.execute(sql)
             formatted = self.formatter.format(columns, results)
             return {
-            "success": True,
-            "sql": sql,
-            "columns": columns,
-            "results": results,
-            "formatted": formatted,
-            "metadata": {
-                "detected_indicators": detected_indicators,
-                "model": LLM_CONFIG["model"],
-                "used_few_shot": use_few_shot,
-                "used_rules": use_rules,
-                "used_guards": use_guards,
-                "used_indicator_knowledge": use_indicator_knowledge,
-                "row_count": len(results),
+                "success": True,
+                "sql": sql,
+                "columns": columns,
+                "results": results,
+                "formatted": formatted,
+                "metadata": {
+                    "detected_indicators": detected_indicators,
+                    "model": LLM_CONFIG["model"],
+                    "used_few_shot": use_few_shot,
+                    "used_rules": use_rules,
+                    "used_guards": use_guards,
+                    "used_indicator_knowledge": use_indicator_knowledge,
+                    "row_count": len(results),
                 }
             }
         except Exception as e:
             return {
-            "success": False,
-            "sql": sql,
-            "error": str(e),
-            "error_type": "database",
-            "metadata": {
-                "detected_indicators": detected_indicators,
-                "model": LLM_CONFIG["model"],
-                "used_few_shot": use_few_shot,
-                "used_rules": use_rules,
-                "used_guards": use_guards,
-                "used_indicator_knowledge": use_indicator_knowledge,
+                "success": False,
+                "sql": sql,
+                "error": str(e),
+                "error_type": "database",
+                "metadata": {
+                    "detected_indicators": detected_indicators,
+                    "model": LLM_CONFIG["model"],
+                    "used_few_shot": use_few_shot,
+                    "used_rules": use_rules,
+                    "used_guards": use_guards,
+                    "used_indicator_knowledge": use_indicator_knowledge,
+                }
             }
-        }
 
-    def _sse_event(self,event_type: str, data: dict) -> str:
+    def _json_serializer(obj):
+        """JSON 序列化补充：处理 Decimal 等非标准类型"""
+        if isinstance(obj, Decimal):
+            return float(obj)
+        raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+
+    def _sse_event(self, event_type: str, data: dict) -> str:
         """构造 SSE 格式的事件字符串"""
-        return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+        return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False, default=self._json_serializer)}\n\n"
 
     def run_stream(
             self,
@@ -135,11 +142,14 @@ class ChatBISystem:
         if use_indicator_knowledge:
             detected_indicators = self.indicator_knowledge.detect_indicators(user_question)
             indicator_block = self.indicator_knowledge.build_knowledge_block(user_question)
-        system_msg, prompt = build_prompt(user_question,use_few_shot=use_few_shot,use_rules=use_rules,use_guards=use_guards,indicator_knowledge=indicator_block)
+        system_msg, prompt = build_prompt(user_question, use_few_shot=use_few_shot, use_rules=use_rules,
+                                          use_guards=use_guards, indicator_knowledge=indicator_block)
         # 3. 流式生成 SQL —— 逐 chunk 推送
         sql_parts = []
         try:
             for chunk_text in self.llm.generate_sql_stream(system_msg, prompt):
+                if not chunk_text:
+                    continue  # 跳过空 chunk
                 sql_parts.append(chunk_text)
                 yield self._sse_event("sql_chunk", {"content": chunk_text})
         except Exception as e:
@@ -154,14 +164,35 @@ class ChatBISystem:
             columns, results = self.db.execute(sql)
             rows_dict = [dict(zip(columns, row)) for row in results]
             yield self._sse_event("result", {
-                            "columns": columns,
-                            "rows": rows_dict,
-                            "row_count": len(results),})
+                "success": True,
+                "sql": sql,
+                "columns": columns,
+                "rows": rows_dict,
+                "row_count": len(results),
+                "metadata": {
+                    "detected_indicators": detected_indicators,
+                    "model": LLM_CONFIG["model"],
+                    "used_few_shot": use_few_shot,
+                    "used_rules": use_rules,
+                    "used_guards": use_guards,
+                    "used_indicator_knowledge": use_indicator_knowledge,
+                    "row_count": len(results),
+                }
+            })
         except Exception as e:
             yield self._sse_event("error", {
-                            "error": str(e),
-                             "error_type": "database",
-                             "sql": sql,})
+                "error": str(e),
+                "error_type": "database",
+                "sql": sql,
+                "metadata": {
+                    "detected_indicators": detected_indicators,
+                    "model": LLM_CONFIG["model"],
+                    "used_few_shot": use_few_shot,
+                    "used_rules": use_rules,
+                    "used_guards": use_guards,
+                    "used_indicator_knowledge": use_indicator_knowledge,
+                }
+            })
 
 
 def main():
