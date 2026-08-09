@@ -6,6 +6,7 @@ FastAPI 服务入口
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from time import perf_counter
 from typing import Any
 
@@ -14,6 +15,9 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from starlette.middleware.cors import CORSMiddleware
+from starlette.responses import StreamingResponse
+from starlette.staticfiles import StaticFiles
 
 from main import ChatBISystem
 
@@ -32,6 +36,14 @@ app = FastAPI(
 )
 
 system = ChatBISystem()
+
+app.add_middleware(
+ CORSMiddleware,
+ allow_origins=["*"], # 生产环境应限制为具体域名
+ allow_credentials=True,
+ allow_methods=["*"],
+ allow_headers=["*"],
+)
 
 
 class QueryRequest(BaseModel):
@@ -260,6 +272,25 @@ def query_chatbi(payload: QueryRequest) -> QuerySuccessResponse:
         formatted=result["formatted"],
         metadata=metadata,
     )
+
+@app.post("/api/v1/query/stream")
+async def query_chatbi_stream(payload: QueryRequest) ->StreamingResponse:
+    def event_generator():
+        for event_str in system.run_stream(user_question=payload.question,use_few_shot=payload.use_few_shot,use_rules=payload.use_rules,use_guards=payload.use_guards,use_indicator_knowledge=payload.use_indicator_knowledge,):
+            yield event_str
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+STATIC_DIR = Path(__file__).parent / "static"
+if STATIC_DIR.is_dir():
+ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 if __name__ == "__main__":

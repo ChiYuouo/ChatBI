@@ -1,4 +1,6 @@
+import re
 import sys
+from typing import Generator
 
 from config import LLM_CONFIG
 from query_parser import QueryParser
@@ -7,6 +9,7 @@ from llm_client import LLMClient
 from database import DatabaseClient
 from result_formatter import ResultFormatter
 from indicator_knowledge import IndicatorKnowledge
+import json
 
 
 class ChatBISystem:
@@ -105,6 +108,60 @@ class ChatBISystem:
                 "used_indicator_knowledge": use_indicator_knowledge,
             }
         }
+
+    def _sse_event(self,event_type: str, data: dict) -> str:
+        """构造 SSE 格式的事件字符串"""
+        return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+    def run_stream(
+            self,
+            user_question: str,
+            use_few_shot: bool = True,
+            use_rules: bool = True,
+            use_guards: bool = True,
+            use_indicator_knowledge: bool = True
+    ) -> Generator[str, None, None]:
+        # 1. 解析问题
+        parsed = self.parser.parse(user_question)
+        if not self.parser.validate(parsed):
+            yield self._sse_event("error", {
+                "error": "输入问题为空",
+                "error_type": "validation"
+            })
+            return
+        # 2. 构造 Prompt（同 run 方法）
+        detected_indicators = []
+        indicator_block = ""
+        if use_indicator_knowledge:
+            detected_indicators = self.indicator_knowledge.detect_indicators(user_question)
+            indicator_block = self.indicator_knowledge.build_knowledge_block(user_question)
+        system_msg, prompt = build_prompt(user_question,use_few_shot=use_few_shot,use_rules=use_rules,use_guards=use_guards,indicator_knowledge=indicator_block)
+        # 3. 流式生成 SQL —— 逐 chunk 推送
+        sql_parts = []
+        try:
+            for chunk_text in self.llm.generate_sql_stream(system_msg, prompt):
+                sql_parts.append(chunk_text)
+                yield self._sse_event("sql_chunk", {"content": chunk_text})
+        except Exception as e:
+            yield self._sse_event("error", {"error": str(e), "error_type": "llm"})
+            return
+        # 4. 拼接完整 SQL 并清理 markdown 标记
+        raw_sql = "".join(sql_parts)
+        sql = re.sub(r'```sql|```', '', raw_sql).strip()
+        yield self._sse_event("sql_done", {"sql": sql})
+        # 5. 执行 SQL
+        try:
+            columns, results = self.db.execute(sql)
+            rows_dict = [dict(zip(columns, row)) for row in results]
+            yield self._sse_event("result", {
+                            "columns": columns,
+                            "rows": rows_dict,
+                            "row_count": len(results),})
+        except Exception as e:
+            yield self._sse_event("error", {
+                            "error": str(e),
+                             "error_type": "database",
+                             "sql": sql,})
 
 
 def main():

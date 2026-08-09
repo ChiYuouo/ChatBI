@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>ChatBI 流式查询演示</title>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1000px;
+            margin: 40px auto;
+            padding: 0 20px;
+        }
+
+        h1 {
+            margin-bottom: 30px;
+        }
+
+        .input-area {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 30px;
+        }
+
+        #question {
+            flex: 1;
+            padding: 12px;
+            font-size: 16px;
+        }
+
+        #queryButton {
+            padding: 12px 30px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+
+        #queryButton:disabled {
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+
+        .box {
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            padding: 18px;
+            margin-bottom: 30px;
+            min-height: 70px;
+        }
+
+        #sqlBox {
+            font-family: Consolas, monospace;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        #errorBox {
+            color: red;
+            margin-top: 20px;
+            font-size: 16px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th,
+        td {
+            border: 1px solid #ccc;
+            padding: 10px;
+            text-align: left;
+        }
+
+        th {
+            background-color: #f5f5f5;
+        }
+    </style>
+</head>
+
+<body>
+
+<h1>ChatBI 流式查询演示</h1>
+
+<div class="input-area">
+
+    <input
+        id="question"
+        type="text"
+        value="查询上个月的利润"
+        placeholder="请输入问题"
+    >
+
+    <button
+        id="queryButton"
+        type="button"
+    >
+        查询
+    </button>
+
+</div>
+
+
+<h2>生成 SQL</h2>
+
+<div class="box">
+    <div id="sqlBox">等待生成...</div>
+</div>
+
+
+<h2>查询结果</h2>
+
+<div class="box">
+    <div id="resultBox">
+        暂无结果
+    </div>
+</div>
+
+
+<div id="errorBox"></div>
+
+
+<script>
+
+    const questionInput =
+        document.getElementById("question");
+
+    const queryButton =
+        document.getElementById("queryButton");
+
+    const sqlBox =
+        document.getElementById("sqlBox");
+
+    const resultBox =
+        document.getElementById("resultBox");
+
+    const errorBox =
+        document.getElementById("errorBox");
+
+
+    // FastAPI 后端地址
+    const API_URL =
+        "http://127.0.0.1:8000/api/v1/query/stream";
+
+
+    queryButton.addEventListener("click", query);
+
+
+    // 回车也可以查询
+    questionInput.addEventListener("keydown", function (event) {
+
+        if (event.key === "Enter") {
+            query();
+        }
+
+    });
+
+
+    async function query() {
+
+        const question =
+            questionInput.value.trim();
+
+
+        if (!question) {
+
+            alert("请输入问题");
+
+            return;
+        }
+
+
+        // 查询期间禁止重复点击
+        queryButton.disabled = true;
+
+
+        // 清空旧内容
+        sqlBox.textContent = "";
+
+        resultBox.textContent =
+            "等待查询结果...";
+
+        errorBox.textContent = "";
+
+
+        let fullSql = "";
+
+
+        try {
+
+            const response = await fetch(API_URL, {
+
+                method: "POST",
+
+                headers: {
+                    "Content-Type": "application/json"
+                },
+
+                body: JSON.stringify({
+                    question: question,
+                    use_few_shot: true,
+                    use_rules: true,
+                    use_guards: true,
+                    use_indicator_knowledge: true
+                })
+
+            });
+
+
+            if (!response.ok) {
+
+                throw new Error(
+                    "HTTP 请求失败：" + response.status
+                );
+
+            }
+
+
+            if (!response.body) {
+
+                throw new Error(
+                    "浏览器没有收到流式响应"
+                );
+
+            }
+
+
+            const reader =
+                response.body.getReader();
+
+            const decoder =
+                new TextDecoder("utf-8");
+
+
+            let buffer = "";
+
+
+            while (true) {
+
+                const {done, value} =
+                    await reader.read();
+
+
+                if (done) {
+                    break;
+                }
+
+
+                // 二进制数据 -> 字符串
+                buffer += decoder.decode(
+                    value,
+                    {
+                        stream: true
+                    }
+                );
+
+
+                // 兼容 \r\n
+                buffer =
+                    buffer.replace(/\r\n/g, "\n");
+
+
+                // SSE 事件之间使用两个换行分割
+                const events =
+                    buffer.split("\n\n");
+
+
+                // 最后一段可能不完整
+                buffer =
+                    events.pop() || "";
+
+
+                for (const eventText of events) {
+
+                    handleSSEEvent(
+                        eventText,
+                        fullSql => {
+
+                            // 保存最新 SQL
+                            window.currentSql =
+                                fullSql;
+
+                        }
+                    );
+
+                }
+
+
+                // 从页面拿当前 SQL
+                fullSql =
+                    window.currentSql || fullSql;
+
+            }
+
+
+        } catch (error) {
+
+            console.error(error);
+
+            errorBox.textContent =
+                "请求失败：" + error.message;
+
+        } finally {
+
+            queryButton.disabled = false;
+
+        }
+
+    }
+
+
+    function handleSSEEvent(
+        eventText,
+        updateSql
+    ) {
+
+        if (!eventText.trim()) {
+            return;
+        }
+
+
+        let eventType = "";
+
+        let eventData = null;
+
+
+        const lines =
+            eventText.split("\n");
+
+
+        for (const line of lines) {
+
+            if (line.startsWith("event:")) {
+
+                eventType =
+                    line.slice(6).trim();
+
+            }
+
+            else if (line.startsWith("data:")) {
+
+                const jsonText =
+                    line.slice(5).trim();
+
+
+                try {
+
+                    eventData =
+                        JSON.parse(jsonText);
+
+                } catch (error) {
+
+                    console.error(
+                        "JSON 解析失败：",
+                        jsonText
+                    );
+
+                    return;
+
+                }
+
+            }
+
+        }
+
+
+        if (!eventType || !eventData) {
+            return;
+        }
+
+
+        console.log(
+            "SSE事件：",
+            eventType,
+            eventData
+        );
+
+
+        switch (eventType) {
+
+            case "sql_chunk": {
+
+                const oldSql =
+                    window.currentSql || "";
+
+                const newSql =
+                    oldSql +
+                    (eventData.content || "");
+
+
+                window.currentSql =
+                    newSql;
+
+
+                sqlBox.textContent =
+                    newSql;
+
+
+                updateSql(newSql);
+
+                break;
+            }
+
+
+            case "sql_done": {
+
+                const sql =
+                    eventData.sql || "";
+
+
+                window.currentSql =
+                    sql;
+
+
+                sqlBox.textContent =
+                    sql;
+
+
+                updateSql(sql);
+
+                break;
+            }
+
+
+            case "result":
+
+                renderResult(
+                    eventData
+                );
+
+                break;
+
+
+            case "error":
+
+                renderError(
+                    eventData
+                );
+
+                break;
+
+        }
+
+    }
+
+
+    function renderResult(data) {
+
+        const columns =
+            data.columns || [];
+
+        const rows =
+            data.rows || [];
+
+
+        if (rows.length === 0) {
+
+            resultBox.textContent =
+                "查询成功，但没有数据";
+
+            return;
+
+        }
+
+
+        let html = "<table>";
+
+
+        // 表头
+        html += "<thead><tr>";
+
+
+        for (const column of columns) {
+
+            html +=
+                `<th>${escapeHtml(column)}</th>`;
+
+        }
+
+
+        html += "</tr></thead>";
+
+
+        // 数据
+        html += "<tbody>";
+
+
+        for (const row of rows) {
+
+            html += "<tr>";
+
+
+            for (const column of columns) {
+
+                const value =
+                    row[column] ?? "";
+
+
+                html +=
+                    `<td>${escapeHtml(String(value))}</td>`;
+
+            }
+
+
+            html += "</tr>";
+
+        }
+
+
+        html += "</tbody>";
+
+        html += "</table>";
+
+
+        html +=
+            `<p>共 ${data.row_count ?? rows.length} 条数据</p>`;
+
+
+        resultBox.innerHTML =
+            html;
+
+    }
+
+
+    function renderError(data) {
+
+        errorBox.textContent =
+            `错误：${data.error || "未知错误"} (${data.error_type || "unknown"})`;
+
+    }
+
+
+    function escapeHtml(text) {
+
+        return text
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;")
+            .replaceAll("'", "&#039;");
+
+    }
+
+</script>
+
+</body>
+</html>
