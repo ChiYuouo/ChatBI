@@ -452,8 +452,7 @@ if __name__ == "__main__":
         system_msg, prompt = build_prompt(
             question,
             use_rules=True,
-            use_guards=True,
-            use_indicators = True  # 启用指标知识注入
+            use_guards=True
         )
 
         return llm.generate_sql(

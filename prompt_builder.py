@@ -136,7 +136,7 @@ def build_prompt(
     use_few_shot: bool = True,
     use_rules: bool = False,
     use_guards: bool = False,
-    indicator_knowledge:  bool = False
+    indicator_knowledge:  str = ""
 ) -> tuple[str, str]:
     """
     构造发送给 LLM 的 Prompt
