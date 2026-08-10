@@ -23,6 +23,7 @@ class LLMClient:
         self.model = LLM_CONFIG["model"]
         self.temperature = LLM_CONFIG["temperature"]
         self.max_tokens = LLM_CONFIG["max_tokens"]
+        self.embedding_model = LLM_CONFIG["embedding_model"]
 
     def generate_sql(self, system_msg: str, prompt: str) -> str:
         """
@@ -71,7 +72,17 @@ class LLMClient:
             if delta_content is not None:
                 yield delta_content
 
+    def get_embedding(self, text: str) -> list[float]:
+        resp = self.client.embeddings.create(
+            model=self.embedding_model,
+            input=text,
+        )
+        embedding = resp.data[0].embedding
+        return embedding
+
 if __name__ == "__main__":
     llm_client = LLMClient()
-    for c in llm_client.generate_sql_stream("回答用户问题","你会做什么"):
-        print(c)
+    client = LLMClient()
+    vec = client.get_embedding("欧洲市场的销售额")
+    print(f"向量维度: {len(vec)}")
+    print(f"前 5 个值: {vec[:5]}")

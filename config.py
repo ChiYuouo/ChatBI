@@ -15,6 +15,7 @@ LLM_CONFIG = {
     "api_key": os.getenv("OPENAI_API_KEY"),
     "model": os.getenv("LLM_MODEL"),
     "base_url": os.getenv("OPENAI_BASE_URL"),
+    "embedding_model": os.getenv("EMBEDDING_MODEL"),
     "temperature": 0.2,
     "max_tokens": 1024,
 }
