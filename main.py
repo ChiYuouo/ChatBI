@@ -25,12 +25,11 @@ class ChatBISystem:
 
     def run(self,
             user_question: str,
-            use_few_shot: bool = True,
-            use_rules: bool = True,
-            use_guards: bool = True,
-            use_indicator_knowledge: bool = True,
-            use_schema_linking: bool = False,
-            use_indicator_rag: bool = False,
+            use_few_shot: bool | None = None,
+            use_rules: bool | None = None,
+            use_guards: bool | None = None,
+            use_indicator_knowledge: bool | None = None,
+            use_schema_linking: bool | None = None,
             ) -> dict:
         """
         运行完整链路
@@ -40,9 +39,25 @@ class ChatBISystem:
             use_rules: 是否启用业务规则
             use_guards: 是否启用错误防护
             use_indicator_knowledge: 是否启用指标知识注入
+            use_schema_linking: 是否启用 Schema Linking 动态注入（第18课）
             Returns:
             包含 SQL、结果或错误信息的字典
         """
+        options = self._resolve_feature_options(
+            {
+                "use_few_shot": use_few_shot,
+                "use_rules": use_rules,
+                "use_guards": use_guards,
+                "use_indicator_knowledge": use_indicator_knowledge,
+                "use_schema_linking": use_schema_linking,
+            }
+        )
+        use_few_shot = options["use_few_shot"]
+        use_rules = options["use_rules"]
+        use_guards = options["use_guards"]
+        use_indicator_knowledge = options["use_indicator_knowledge"]
+        use_schema_linking = options["use_schema_linking"]
+
         # 1. 解析问题
         parsed = self.parser.parse(user_question)
         if not self.parser.validate(parsed):
@@ -55,7 +70,7 @@ class ChatBISystem:
             detected_indicators = self.indicator_knowledge.detect_indicators(user_question)
             indicator_block = self.indicator_knowledge.build_knowledge_block(user_question)
         system_msg, prompt = build_prompt(user_question, use_few_shot=use_few_shot, use_rules=use_rules,
-                                          use_guards=use_guards, indicator_knowledge=indicator_block)
+                                          use_guards=use_guards, indicator_knowledge=indicator_block,use_schema_linking=use_schema_linking,)
 
         # 3. 生成 SQL
         try:
@@ -71,6 +86,7 @@ class ChatBISystem:
                     "used_rules": use_rules,
                     "used_guards": use_guards,
                     "used_indicator_knowledge": use_indicator_knowledge,
+                    "used_schema_linking": use_schema_linking,
                 }
             }
 
@@ -91,6 +107,7 @@ class ChatBISystem:
                     "used_rules": use_rules,
                     "used_guards": use_guards,
                     "used_indicator_knowledge": use_indicator_knowledge,
+                    "used_schema_linking": use_schema_linking,
                     "row_count": len(results),
                 }
             }
@@ -107,6 +124,7 @@ class ChatBISystem:
                     "used_rules": use_rules,
                     "used_guards": use_guards,
                     "used_indicator_knowledge": use_indicator_knowledge,
+                    "used_schema_linking": use_schema_linking,
                 }
             }
 
@@ -123,11 +141,50 @@ class ChatBISystem:
     def run_stream(
             self,
             user_question: str,
-            use_few_shot: bool = True,
-            use_rules: bool = True,
-            use_guards: bool = True,
-            use_indicator_knowledge: bool = True
+            use_few_shot: bool | None = None,
+            use_rules: bool | None = None,
+            use_guards: bool | None = None,
+            use_indicator_knowledge: bool | None = None,
+            use_schema_linking: bool | None = None,
     ) -> Generator[str, None, None]:
+        """
+                流式运行完整链路，按阶段 yield SSE 事件字符串
+
+                事件类型：
+                - sql_chunk: LLM 流式产出的 SQL 片段
+                - sql_done: SQL 完整输出 + 执行结果
+                - result: 查询结果（columns + rows）
+                - error: 异常信息
+
+                每个 yield 的字符串格式为 "event: <type>\\ndata: <json>\\n\\n"，
+                可直接作为 SSE 推送内容。
+
+                Args:
+                    user_question: 用户自然语言问题
+                    use_few_shot: 是否使用 Few-shot
+                    use_rules: 是否启用业务规则
+                    use_guards: 是否启用错误防护
+                    use_indicator_knowledge: 是否启用指标知识注入（关键词匹配，第9课）
+                    use_schema_linking: 是否启用 Schema Linking 动态注入（第18课）
+
+                Yields:
+                    SSE 格式的事件字符串
+                """
+        options = self._resolve_feature_options(
+            {
+                "use_few_shot": use_few_shot,
+                "use_rules": use_rules,
+                "use_guards": use_guards,
+                "use_indicator_knowledge": use_indicator_knowledge,
+                "use_schema_linking": use_schema_linking,
+            }
+        )
+        use_few_shot = options["use_few_shot"]
+        use_rules = options["use_rules"]
+        use_guards = options["use_guards"]
+        use_indicator_knowledge = options["use_indicator_knowledge"]
+        use_schema_linking = options["use_schema_linking"]
+
         # 1. 解析问题
         parsed = self.parser.parse(user_question)
         if not self.parser.validate(parsed):
@@ -143,7 +200,7 @@ class ChatBISystem:
             detected_indicators = self.indicator_knowledge.detect_indicators(user_question)
             indicator_block = self.indicator_knowledge.build_knowledge_block(user_question)
         system_msg, prompt = build_prompt(user_question, use_few_shot=use_few_shot, use_rules=use_rules,
-                                          use_guards=use_guards, indicator_knowledge=indicator_block)
+                                          use_guards=use_guards, indicator_knowledge=indicator_block,use_schema_linking=use_schema_linking)
         # 3. 流式生成 SQL —— 逐 chunk 推送
         sql_parts = []
         try:
@@ -176,6 +233,7 @@ class ChatBISystem:
                     "used_rules": use_rules,
                     "used_guards": use_guards,
                     "used_indicator_knowledge": use_indicator_knowledge,
+                    "used_schema_linking": use_schema_linking,
                     "row_count": len(results),
                 }
             })
@@ -191,6 +249,7 @@ class ChatBISystem:
                     "used_rules": use_rules,
                     "used_guards": use_guards,
                     "used_indicator_knowledge": use_indicator_knowledge,
+                    "used_schema_linking": use_schema_linking,
                 }
             })
 
