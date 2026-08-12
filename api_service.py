@@ -75,6 +75,16 @@ class QueryRequest(BaseModel):
         description="是否注入指标知识"
     )
 
+    use_schema_linking: bool | None = Field(
+        default=None,
+        description="是否启用 Schema Linking"
+    )
+
+    use_indicator_rag: bool | None = Field(
+        default=None,
+        description="是否启用指标 RAG")
+
+
 
 class HealthResponse(BaseModel):
     """健康检查响应"""
@@ -226,6 +236,7 @@ def query_chatbi(payload: QueryRequest) -> QuerySuccessResponse:
         use_rules=payload.use_rules,
         use_guards=payload.use_guards,
         use_indicator_knowledge=payload.use_indicator_knowledge,
+        use_schema_linking=payload.use_schema_linking,
     )
 
     duration_ms = round(

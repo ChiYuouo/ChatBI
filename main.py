@@ -23,6 +23,40 @@ class ChatBISystem:
         self.db = DatabaseClient()
         self.formatter = ResultFormatter()
 
+
+    def _resolve_indicator_context(
+            self,
+            user_question: str,
+            use_indicator_knowledge: bool,
+            use_indicator_rag: bool,
+            indicator_knowledge: IndicatorKnowledge,
+    ) -> tuple[list[str], str]:
+        """统一解析指标上下文，避免 RAG/关键词路径重复执行同一检索逻辑。"""
+        detected_indicators = []
+        indicator_block = ""
+
+        if use_indicator_rag:
+            try:
+                from indicator_retriever import retrieve_indicator_context
+
+                context = retrieve_indicator_context(user_question)
+                detected_indicators = context["detected_indicators"]
+                indicator_block = context["indicator_block"]
+            except Exception:
+                detected_indicators = []
+                indicator_block = ""
+
+            if use_indicator_knowledge and not indicator_block:
+                context = indicator_knowledge.get_indicator_context(user_question)
+                detected_indicators = context["detected_indicators"]
+                indicator_block = context["indicator_block"]
+        elif use_indicator_knowledge:
+            context = indicator_knowledge.get_indicator_context(user_question)
+            detected_indicators = context["detected_indicators"]
+            indicator_block = context["indicator_block"]
+
+        return detected_indicators, indicator_block
+
     def run(self,
             user_question: str,
             use_few_shot: bool | None = None,
@@ -30,6 +64,7 @@ class ChatBISystem:
             use_guards: bool | None = None,
             use_indicator_knowledge: bool | None = None,
             use_schema_linking: bool | None = None,
+            use_indicator_rag: bool | None = None,
             ) -> dict:
         """
         运行完整链路
@@ -40,37 +75,38 @@ class ChatBISystem:
             use_guards: 是否启用错误防护
             use_indicator_knowledge: 是否启用指标知识注入
             use_schema_linking: 是否启用 Schema Linking 动态注入（第18课）
+            use_indicator_rag: 是否启用指标 RAG 语义检索（第19课，替代关键词匹配）
             Returns:
             包含 SQL、结果或错误信息的字典
         """
-        options = self._resolve_feature_options(
-            {
-                "use_few_shot": use_few_shot,
-                "use_rules": use_rules,
-                "use_guards": use_guards,
-                "use_indicator_knowledge": use_indicator_knowledge,
-                "use_schema_linking": use_schema_linking,
-            }
-        )
-        use_few_shot = options["use_few_shot"]
-        use_rules = options["use_rules"]
-        use_guards = options["use_guards"]
-        use_indicator_knowledge = options["use_indicator_knowledge"]
-        use_schema_linking = options["use_schema_linking"]
+        use_few_shot = use_few_shot
+        use_rules = use_rules
+        use_guards = use_guards
+        use_indicator_knowledge =use_indicator_knowledge
+        use_schema_linking = use_schema_linking
+        use_indicator_rag = use_indicator_rag
 
         # 1. 解析问题
         parsed = self.parser.parse(user_question)
         if not self.parser.validate(parsed):
             return {"success": False, "error": "输入问题无效", "error_type": "validation"}
 
-        # 2. 构造 Prompt
-        detected_indicators = []
-        indicator_block = ""
-        if use_indicator_knowledge:
-            detected_indicators = self.indicator_knowledge.detect_indicators(user_question)
-            indicator_block = self.indicator_knowledge.build_knowledge_block(user_question)
-        system_msg, prompt = build_prompt(user_question, use_few_shot=use_few_shot, use_rules=use_rules,
-                                          use_guards=use_guards, indicator_knowledge=indicator_block,use_schema_linking=use_schema_linking,)
+        # 2. 指标知识注入（二选一：RAG 优先，关键词匹配兜底）
+        detected_indicators, indicator_block = self._resolve_indicator_context(
+            user_question=user_question,
+            use_indicator_knowledge=use_indicator_knowledge,
+            use_indicator_rag=use_indicator_rag,
+            indicator_knowledge=self.indicator_knowledge
+        )
+        # 3. 构造 Prompt（Schema Linking 在 build_prompt 内部处理）
+        system_msg, prompt = build_prompt(
+            user_question,
+            use_few_shot=use_few_shot,
+            use_rules=use_rules,
+            use_guards=use_guards,
+            indicator_knowledge=indicator_block,
+            use_schema_linking=use_schema_linking,
+        )
 
         # 3. 生成 SQL
         try:
@@ -87,6 +123,7 @@ class ChatBISystem:
                     "used_guards": use_guards,
                     "used_indicator_knowledge": use_indicator_knowledge,
                     "used_schema_linking": use_schema_linking,
+                    "used_indicator_rag": use_indicator_rag,
                 }
             }
 
@@ -108,6 +145,7 @@ class ChatBISystem:
                     "used_guards": use_guards,
                     "used_indicator_knowledge": use_indicator_knowledge,
                     "used_schema_linking": use_schema_linking,
+                    "used_indicator_rag": use_indicator_rag,
                     "row_count": len(results),
                 }
             }
@@ -125,6 +163,7 @@ class ChatBISystem:
                     "used_guards": use_guards,
                     "used_indicator_knowledge": use_indicator_knowledge,
                     "used_schema_linking": use_schema_linking,
+                    "used_indicator_rag": use_indicator_rag,
                 }
             }
 
@@ -146,6 +185,7 @@ class ChatBISystem:
             use_guards: bool | None = None,
             use_indicator_knowledge: bool | None = None,
             use_schema_linking: bool | None = None,
+            use_indicator_rag: bool | None = None,
     ) -> Generator[str, None, None]:
         """
                 流式运行完整链路，按阶段 yield SSE 事件字符串
@@ -166,24 +206,16 @@ class ChatBISystem:
                     use_guards: 是否启用错误防护
                     use_indicator_knowledge: 是否启用指标知识注入（关键词匹配，第9课）
                     use_schema_linking: 是否启用 Schema Linking 动态注入（第18课）
-
+                    use_indicator_rag: 是否启用指标 RAG 语义检索（第19课，替代关键词匹配）
                 Yields:
                     SSE 格式的事件字符串
                 """
-        options = self._resolve_feature_options(
-            {
-                "use_few_shot": use_few_shot,
-                "use_rules": use_rules,
-                "use_guards": use_guards,
-                "use_indicator_knowledge": use_indicator_knowledge,
-                "use_schema_linking": use_schema_linking,
-            }
-        )
-        use_few_shot = options["use_few_shot"]
-        use_rules = options["use_rules"]
-        use_guards = options["use_guards"]
-        use_indicator_knowledge = options["use_indicator_knowledge"]
-        use_schema_linking = options["use_schema_linking"]
+        use_few_shot = use_few_shot
+        use_rules = use_rules
+        use_guards = use_guards
+        use_indicator_knowledge = use_indicator_knowledge
+        use_schema_linking = use_schema_linking
+        use_indicator_rag = use_indicator_rag
 
         # 1. 解析问题
         parsed = self.parser.parse(user_question)
@@ -193,14 +225,22 @@ class ChatBISystem:
                 "error_type": "validation"
             })
             return
-        # 2. 构造 Prompt（同 run 方法）
-        detected_indicators = []
-        indicator_block = ""
-        if use_indicator_knowledge:
-            detected_indicators = self.indicator_knowledge.detect_indicators(user_question)
-            indicator_block = self.indicator_knowledge.build_knowledge_block(user_question)
-        system_msg, prompt = build_prompt(user_question, use_few_shot=use_few_shot, use_rules=use_rules,
-                                          use_guards=use_guards, indicator_knowledge=indicator_block,use_schema_linking=use_schema_linking)
+        # 2. 指标知识注入（二选一：RAG 优先，关键词匹配兜底）
+        detected_indicators, indicator_block = self._resolve_indicator_context(
+            user_question=user_question,
+            use_indicator_knowledge=use_indicator_knowledge,
+            use_indicator_rag=use_indicator_rag,
+            indicator_knowledge = self.indicator_knowledge
+        )
+        # 3. 构造 Prompt（Schema Linking 在 build_prompt 内部处理）
+        system_msg, prompt = build_prompt(
+            user_question,
+            use_few_shot=use_few_shot,
+            use_rules=use_rules,
+            use_guards=use_guards,
+            indicator_knowledge=indicator_block,
+            use_schema_linking=use_schema_linking,
+        )
         # 3. 流式生成 SQL —— 逐 chunk 推送
         sql_parts = []
         try:
@@ -234,6 +274,7 @@ class ChatBISystem:
                     "used_guards": use_guards,
                     "used_indicator_knowledge": use_indicator_knowledge,
                     "used_schema_linking": use_schema_linking,
+                    "used_indicator_rag": use_indicator_rag,
                     "row_count": len(results),
                 }
             })
@@ -250,6 +291,7 @@ class ChatBISystem:
                     "used_guards": use_guards,
                     "used_indicator_knowledge": use_indicator_knowledge,
                     "used_schema_linking": use_schema_linking,
+                    "used_indicator_rag": use_indicator_rag,
                 }
             })
 
