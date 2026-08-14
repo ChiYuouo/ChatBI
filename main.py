@@ -10,6 +10,7 @@ from llm_client import LLMClient
 from database import DatabaseClient
 from result_formatter import ResultFormatter
 from indicator_knowledge import IndicatorKnowledge
+from security import SecurityError, UserContext
 import json
 
 
@@ -65,6 +66,7 @@ class ChatBISystem:
             use_indicator_knowledge: bool | None = None,
             use_schema_linking: bool | None = None,
             use_indicator_rag: bool | None = None,
+            security_context: UserContext | None = None,
             ) -> dict:
         """
         运行完整链路
@@ -76,15 +78,11 @@ class ChatBISystem:
             use_indicator_knowledge: 是否启用指标知识注入
             use_schema_linking: 是否启用 Schema Linking 动态注入（第18课）
             use_indicator_rag: 是否启用指标 RAG 语义检索（第19课，替代关键词匹配）
+            security_context: 当前请求的权限上下文
             Returns:
             包含 SQL、结果或错误信息的字典
         """
-        use_few_shot = use_few_shot
-        use_rules = use_rules
-        use_guards = use_guards
-        use_indicator_knowledge =use_indicator_knowledge
-        use_schema_linking = use_schema_linking
-        use_indicator_rag = use_indicator_rag
+        user_context = security_context or UserContext.demo_admin()
 
         # 1. 解析问题
         parsed = self.parser.parse(user_question)
@@ -124,12 +122,14 @@ class ChatBISystem:
                     "used_indicator_knowledge": use_indicator_knowledge,
                     "used_schema_linking": use_schema_linking,
                     "used_indicator_rag": use_indicator_rag,
+                    "security_role": user_context.role,
+                    "security_region": user_context.region,
                 }
             }
 
         # 4. 执行 SQL
         try:
-            columns, results = self.db.execute(sql)
+            columns, results = self.db.execute(sql, user=user_context)
             formatted = self.formatter.format(columns, results)
             return {
                 "success": True,
@@ -146,7 +146,28 @@ class ChatBISystem:
                     "used_indicator_knowledge": use_indicator_knowledge,
                     "used_schema_linking": use_schema_linking,
                     "used_indicator_rag": use_indicator_rag,
+                    "security_role": user_context.role,
+                    "security_region": user_context.region,
                     "row_count": len(results),
+                }
+            }
+        except SecurityError as e:
+            return {
+                "success": False,
+                "sql": sql,
+                "error": str(e),
+                "error_type": "security",
+                "metadata": {
+                    "detected_indicators": detected_indicators,
+                    "model": LLM_CONFIG["model"],
+                    "used_few_shot": use_few_shot,
+                    "used_rules": use_rules,
+                    "used_guards": use_guards,
+                    "used_indicator_knowledge": use_indicator_knowledge,
+                    "used_schema_linking": use_schema_linking,
+                    "used_indicator_rag": use_indicator_rag,
+                    "security_role": user_context.role,
+                    "security_region": user_context.region,
                 }
             }
         except Exception as e:
@@ -164,6 +185,8 @@ class ChatBISystem:
                     "used_indicator_knowledge": use_indicator_knowledge,
                     "used_schema_linking": use_schema_linking,
                     "used_indicator_rag": use_indicator_rag,
+                    "security_role": user_context.role,
+                    "security_region": user_context.region,
                 }
             }
 
@@ -186,6 +209,7 @@ class ChatBISystem:
             use_indicator_knowledge: bool | None = None,
             use_schema_linking: bool | None = None,
             use_indicator_rag: bool | None = None,
+            security_context: UserContext | None = None,
     ) -> Generator[str, None, None]:
         """
                 流式运行完整链路，按阶段 yield SSE 事件字符串
@@ -207,15 +231,11 @@ class ChatBISystem:
                     use_indicator_knowledge: 是否启用指标知识注入（关键词匹配，第9课）
                     use_schema_linking: 是否启用 Schema Linking 动态注入（第18课）
                     use_indicator_rag: 是否启用指标 RAG 语义检索（第19课，替代关键词匹配）
+                    security_context: 当前请求的权限上下文
                 Yields:
                     SSE 格式的事件字符串
                 """
-        use_few_shot = use_few_shot
-        use_rules = use_rules
-        use_guards = use_guards
-        use_indicator_knowledge = use_indicator_knowledge
-        use_schema_linking = use_schema_linking
-        use_indicator_rag = use_indicator_rag
+        user_context = security_context or UserContext.demo_admin()
 
         # 1. 解析问题
         parsed = self.parser.parse(user_question)
@@ -250,7 +270,19 @@ class ChatBISystem:
                 sql_parts.append(chunk_text)
                 yield self._sse_event("sql_chunk", {"content": chunk_text})
         except Exception as e:
-            yield self._sse_event("error", {"error": str(e), "error_type": "llm"})
+            yield self._sse_event("error", {
+                "error": str(e),
+                "error_type": "llm",
+                "metadata": {
+                    "detected_indicators": detected_indicators,
+                    "model": LLM_CONFIG["model"],
+                    "used_indicator_knowledge": use_indicator_knowledge,
+                    "used_schema_linking": use_schema_linking,
+                    "used_indicator_rag": use_indicator_rag,
+                    "security_role": user_context.role,
+                    "security_region": user_context.region,
+                }
+            })
             return
         # 4. 拼接完整 SQL 并清理 markdown 标记
         raw_sql = "".join(sql_parts)
@@ -258,7 +290,7 @@ class ChatBISystem:
         yield self._sse_event("sql_done", {"sql": sql})
         # 5. 执行 SQL
         try:
-            columns, results = self.db.execute(sql)
+            columns, results = self.db.execute(sql, user=user_context)
             rows_dict = [dict(zip(columns, row)) for row in results]
             yield self._sse_event("result", {
                 "success": True,
@@ -275,7 +307,24 @@ class ChatBISystem:
                     "used_indicator_knowledge": use_indicator_knowledge,
                     "used_schema_linking": use_schema_linking,
                     "used_indicator_rag": use_indicator_rag,
+                    "security_role": user_context.role,
+                    "security_region": user_context.region,
                     "row_count": len(results),
+                }
+            })
+        except SecurityError as e:
+            yield self._sse_event("error", {
+                "error": str(e),
+                "error_type": "security",
+                "sql": sql,
+                "metadata": {
+                    "detected_indicators": detected_indicators,
+                    "model": LLM_CONFIG["model"],
+                    "used_indicator_knowledge": use_indicator_knowledge,
+                    "used_schema_linking": use_schema_linking,
+                    "used_indicator_rag": use_indicator_rag,
+                    "security_role": user_context.role,
+                    "security_region": user_context.region,
                 }
             })
         except Exception as e:
@@ -292,6 +341,8 @@ class ChatBISystem:
                     "used_indicator_knowledge": use_indicator_knowledge,
                     "used_schema_linking": use_schema_linking,
                     "used_indicator_rag": use_indicator_rag,
+                    "security_role": user_context.role,
+                    "security_region": user_context.region,
                 }
             })
 

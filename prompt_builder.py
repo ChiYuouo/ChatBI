@@ -190,7 +190,7 @@ def build_prompt(
         except Exception:
             pass  # 回退到全量 SCHEMA
 
-        prompt = f"""【数据库Schema】
+    prompt = f"""【数据库Schema】
     {schema_text}
     """
 

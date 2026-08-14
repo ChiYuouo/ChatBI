@@ -20,6 +20,7 @@ from starlette.responses import StreamingResponse
 from starlette.staticfiles import StaticFiles
 
 from main import ChatBISystem
+from security import UserContext
 
 
 logging.basicConfig(
@@ -84,6 +85,21 @@ class QueryRequest(BaseModel):
         default=None,
         description="是否启用指标 RAG")
 
+    user_id: str | None = Field(
+        default=None,
+        description="用户 ID，可选；未传时优先走请求头"
+    )
+
+    user_role: str | None = Field(
+        default=None,
+        description="用户角色：admin / finance / sales"
+    )
+
+    user_region: str | None = Field(
+        default=None,
+        description="用户所属区域，行级权限过滤"
+    )
+
 
 
 class HealthResponse(BaseModel):
@@ -121,6 +137,25 @@ def _rows_to_dicts(
     """将数据库元组结果转换为 JSON 可直接返回的字典列表"""
 
     return [dict(zip(columns, row)) for row in results]
+
+def _build_user_context(request: Request, payload: QueryRequest) -> UserContext:
+    state_context = getattr(request.state, "user_context", UserContext.demo_admin())
+    return UserContext(
+        user_id=payload.user_id or state_context.user_id,
+        role=payload.user_role or state_context.role,
+        region=payload.user_region or state_context.region,
+    )
+
+
+@app.middleware("http")
+async def attach_user_context(request: Request, call_next):
+    """把最小权限上下文挂到 request.state，供查询链路复用。"""
+    request.state.user_context = UserContext(
+        user_id=request.headers.get("x-user-id", "demo_admin"),
+        role=request.headers.get("x-user-role", "admin"),
+        region=request.headers.get("x-user-region"),
+    )
+    return await call_next(request)
 
 
 @app.exception_handler(RequestValidationError)
@@ -223,12 +258,14 @@ def health_check() -> HealthResponse:
         },
     },
 )
-def query_chatbi(payload: QueryRequest) -> QuerySuccessResponse:
+def query_chatbi(payload: QueryRequest, request: Request) -> QuerySuccessResponse:
     """执行自然语言查询，并返回标准化结果（同步，一次性返回）"""
 
     started_at = perf_counter()
 
     logger.info("Received question: %s", payload.question)
+
+    user_context = _build_user_context(request, payload)
 
     result = system.run(
         user_question=payload.question,
@@ -237,6 +274,8 @@ def query_chatbi(payload: QueryRequest) -> QuerySuccessResponse:
         use_guards=payload.use_guards,
         use_indicator_knowledge=payload.use_indicator_knowledge,
         use_schema_linking=payload.use_schema_linking,
+        use_indicator_rag=payload.use_indicator_rag,
+        security_context=user_context,
     )
 
     duration_ms = round(
@@ -256,6 +295,8 @@ def query_chatbi(payload: QueryRequest) -> QuerySuccessResponse:
             status_code = 400
         elif error_type == "llm":
             status_code = 502
+        elif error_type == "security":
+            status_code = 403
 
         raise HTTPException(
             status_code=status_code,
@@ -285,9 +326,33 @@ def query_chatbi(payload: QueryRequest) -> QuerySuccessResponse:
     )
 
 @app.post("/api/v1/query/stream")
-async def query_chatbi_stream(payload: QueryRequest) ->StreamingResponse:
+async def query_chatbi_stream(payload: QueryRequest, request: Request) -> StreamingResponse:
+    """
+      执行自然语言查询，以 SSE 流式返回结果
+
+      SSE 事件类型：
+      - sql_chunk: LLM 流式产出的 SQL 文本片段，前端可逐字拼接展示
+      - sql_done: SQL 完整输出，前端可用于复制或二次处理
+      - result: 查询结果（columns + rows）
+      - error: 异常信息
+
+      每个事件的格式为：
+          event: <type>
+          data: <json>
+      """
+    logger.info("Stream request received: %s", payload.question)
+    user_context = _build_user_context(request, payload)
+
     def event_generator():
-        for event_str in system.run_stream(user_question=payload.question,use_few_shot=payload.use_few_shot,use_rules=payload.use_rules,use_guards=payload.use_guards,use_indicator_knowledge=payload.use_indicator_knowledge,):
+        for event_str in system.run_stream(
+                user_question=payload.question,
+                use_few_shot=payload.use_few_shot,
+                use_rules=payload.use_rules,
+                use_guards=payload.use_guards,
+                use_indicator_knowledge=payload.use_indicator_knowledge,
+                use_indicator_rag=payload.use_indicator_rag,
+                security_context=user_context,
+        ):
             yield event_str
     return StreamingResponse(
         event_generator(),
