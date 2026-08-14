@@ -14,7 +14,7 @@ from typing import Any, Callable
 
 import pymysql
 
-from config import DB_CONFIG, DB_RUNTIME_CONFIG
+from config import APP_CONFIG, DB_RUNTIME_CONFIG, get_database_source_config
 from security import QuerySecurityManager, UserContext
 
 logger = logging.getLogger("chatbi.database")
@@ -96,13 +96,16 @@ class DatabaseClient:
 
     def __init__(
         self,
+        db_config: dict[str, Any] | None = None,
+        source_id: str | None = None,
         connection_factory: Callable[[], Any] | None = None,
         security_manager: QuerySecurityManager | None = None,
         slow_query_threshold_ms: float | None = None,
         time_fn: Callable[[], float] | None = None,
         connection_pool: DatabaseConnectionPool | None = None,
     ):
-        self.config = DB_CONFIG
+        self.source_id = source_id or APP_CONFIG["database"]["default_source"]
+        self.config = db_config or get_database_source_config(self.source_id)
         self.security = security_manager or QuerySecurityManager()
         self.time_fn = time_fn or perf_counter
         self.slow_query_threshold_ms = (
@@ -116,7 +119,7 @@ class DatabaseClient:
 
         if self.connection_factory is None and self.connection_pool is None:
             self.connection_pool = DatabaseConnectionPool(
-                connection_factory=lambda: pymysql.connect(**self.config),
+                connection_factory=lambda: pymysql.connect(**self._connection_kwargs()),
                 pool_size=DB_RUNTIME_CONFIG["pool_size"],
                 max_overflow=DB_RUNTIME_CONFIG["max_overflow"],
                 pool_timeout=DB_RUNTIME_CONFIG["pool_timeout"],
@@ -196,6 +199,13 @@ class DatabaseClient:
             self.connection_pool.release(conn)
         else:
             conn.close()
+
+    def _connection_kwargs(self) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in self.config.items()
+            if key not in {"driver", "name"}
+        }
 
     def _explain(self, cursor: Any, sql: str, duration_ms: float) -> list[dict[str, Any]]:
         if duration_ms < self.slow_query_threshold_ms:

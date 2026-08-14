@@ -25,6 +25,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from config import APP_CONFIG
 from main import ChatBISystem
 from security import UserContext
 
@@ -72,7 +73,7 @@ app = FastAPI(
         {"name": "系统", "description": "系统运维与监控接口"},
     ],
 )
-system = ChatBISystem()
+system = ChatBISystem(app_config=APP_CONFIG)
 
 # ==================== CORS 中间件 ====================
 # 前后端分离时，浏览器从 localhost:3000/file:// 访问 localhost:8000 会触发跨域限制
@@ -90,12 +91,13 @@ class QueryRequest(BaseModel):
     """查询请求体"""
 
     question: str = Field(..., min_length=1, description="业务人员的自然语言问题")
-    use_few_shot: bool = Field(default=True, description="是否启用 Few-shot 示例")
-    use_rules: bool = Field(default=True, description="是否启用业务规则约束")
-    use_guards: bool = Field(default=True, description="是否启用错误防护")
-    use_indicator_knowledge: bool = Field(default=True, description="是否注入指标知识")
-    use_schema_linking: bool = Field(default=False, description="是否启用 Schema Linking")
-    use_indicator_rag: bool = Field(default=False, description="是否启用指标 RAG")
+    use_few_shot: bool | None = Field(default=None, description="是否启用 Few-shot 示例")
+    use_rules: bool | None = Field(default=None, description="是否启用业务规则约束")
+    use_guards: bool | None = Field(default=None, description="是否启用错误防护")
+    use_indicator_knowledge: bool | None = Field(default=None, description="是否注入指标知识")
+    use_schema_linking: bool | None = Field(default=None, description="是否启用 Schema Linking")
+    use_indicator_rag: bool | None = Field(default=None, description="是否启用指标 RAG")
+    source_id: str | None = Field(default=None, description="数据源标识；未传时使用系统默认数据源")
     user_id: str | None = Field(default=None, description="用户 ID，可选；未传时优先走请求头")
     user_role: str | None = Field(default=None, description="用户角色：admin / finance / sales")
     user_region: str | None = Field(default=None, description="用户所属区域，行级权限过滤")
@@ -141,6 +143,30 @@ def _build_user_context(request: Request, payload: QueryRequest) -> UserContext:
         role=payload.user_role or state_context.role,
         region=payload.user_region or state_context.region,
     )
+
+
+def _resolve_query_options(payload: QueryRequest, app_config: dict) -> dict[str, bool]:
+    feature_defaults = app_config.get("features", {})
+    return {
+        "use_few_shot": payload.use_few_shot if payload.use_few_shot is not None else feature_defaults.get("few_shot", False),
+        "use_rules": payload.use_rules if payload.use_rules is not None else feature_defaults.get("rules", False),
+        "use_guards": payload.use_guards if payload.use_guards is not None else feature_defaults.get("guards", False),
+        "use_indicator_knowledge": (
+            payload.use_indicator_knowledge
+            if payload.use_indicator_knowledge is not None
+            else feature_defaults.get("indicator_knowledge", False)
+        ),
+        "use_schema_linking": (
+            payload.use_schema_linking
+            if payload.use_schema_linking is not None
+            else feature_defaults.get("schema_linking", False)
+        ),
+        "use_indicator_rag": (
+            payload.use_indicator_rag
+            if payload.use_indicator_rag is not None
+            else feature_defaults.get("indicator_rag", False)
+        ),
+    }
 
 
 @app.middleware("http")
@@ -215,9 +241,10 @@ def read_root() -> dict[str, str]:
 @app.get("/health", response_model=HealthResponse, tags=["系统"])
 def health_check() -> HealthResponse:
     """检查 API 服务和数据库连通性"""
+    runtime = system._get_runtime()
     return HealthResponse(
         status="ok",
-        database_connected=system.db.validate_connection()
+        database_connected=runtime.db.validate_connection()
     )
 
 
@@ -241,16 +268,13 @@ def query_chatbi(payload: QueryRequest, request: Request) -> QuerySuccessRespons
     started_at = perf_counter()
     logger.info("Received question: %s", payload.question)
     user_context = _build_user_context(request, payload)
+    query_options = _resolve_query_options(payload, APP_CONFIG)
 
     result = system.run(
         user_question=payload.question,
-        use_few_shot=payload.use_few_shot,
-        use_rules=payload.use_rules,
-        use_guards=payload.use_guards,
-        use_indicator_knowledge=payload.use_indicator_knowledge,
-        use_schema_linking=payload.use_schema_linking,
-        use_indicator_rag=payload.use_indicator_rag,
+        source_id=payload.source_id,
         security_context=user_context,
+        **query_options,
     )
 
     duration_ms = round((perf_counter() - started_at) * 1000, 2)
@@ -305,17 +329,14 @@ async def query_chatbi_stream(payload: QueryRequest, request: Request) -> Stream
     """
     logger.info("Stream request received: %s", payload.question)
     user_context = _build_user_context(request, payload)
+    query_options = _resolve_query_options(payload, APP_CONFIG)
 
     def event_generator():
         for event_str in system.run_stream(
             user_question=payload.question,
-            use_few_shot=payload.use_few_shot,
-            use_rules=payload.use_rules,
-            use_guards=payload.use_guards,
-            use_indicator_knowledge=payload.use_indicator_knowledge,
-            use_schema_linking=payload.use_schema_linking,
-            use_indicator_rag=payload.use_indicator_rag,
+            source_id=payload.source_id,
             security_context=user_context,
+            **query_options,
         ):
             yield event_str
 

@@ -17,33 +17,64 @@ import json
 import re
 import sys
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Generator
 
-from config import LLM_CONFIG
+from config import APP_CONFIG, LLM_CONFIG
 from database import DatabaseClient, QueryExecutionError
 from indicator_knowledge import IndicatorKnowledge
 from llm_client import LLMClient
 from prompt_builder import build_prompt
 from query_parser import QueryParser
 from result_formatter import ResultFormatter
+from runtime_factory import build_runtime
 from security import SecurityError, UserContext
 
 
 class ChatBISystem:
     """ChatBI 系统主类"""
 
-    def __init__(self):
-        self.parser = QueryParser()
-        self.llm = LLMClient()
-        self.db = DatabaseClient()
-        self.formatter = ResultFormatter()
-        self.indicator_knowledge = IndicatorKnowledge()
+    def __init__(
+        self,
+        runtime=None,
+        app_config: dict | None = None,
+        runtime_factory=build_runtime,
+    ):
+        self.app_config = app_config or APP_CONFIG
+        self.runtime_factory = runtime_factory
+        self.runtime = runtime or self.runtime_factory(self.app_config)
+        self.parser = self.runtime.parser
+        self.llm = self.runtime.llm
+        self.db = self.runtime.db
+        self.formatter = self.runtime.formatter
+        self.indicator_knowledge = self.runtime.indicator_knowledge
+
+    def _get_runtime(self, source_id: str | None = None):
+        if source_id is None or source_id == self.runtime.source_id:
+            return SimpleNamespace(
+                source_id=self.runtime.source_id,
+                parser=self.parser,
+                llm=self.llm,
+                db=self.db,
+                formatter=self.formatter,
+                indicator_knowledge=self.indicator_knowledge,
+            )
+        return self.runtime_factory(self.app_config, source_id=source_id)
+
+    def _resolve_feature_options(self, overrides: dict[str, bool | None]) -> dict[str, bool]:
+        feature_defaults = self.app_config.get("features", {})
+        resolved = {}
+        for option_name, value in overrides.items():
+            feature_key = option_name.removeprefix("use_")
+            resolved[option_name] = value if value is not None else feature_defaults.get(feature_key, False)
+        return resolved
 
     def _resolve_indicator_context(
         self,
         user_question: str,
         use_indicator_knowledge: bool,
         use_indicator_rag: bool,
+        indicator_knowledge: IndicatorKnowledge,
     ) -> tuple[list[str], str]:
         """统一解析指标上下文，避免 RAG/关键词路径重复执行同一检索逻辑。"""
         detected_indicators = []
@@ -61,11 +92,11 @@ class ChatBISystem:
                 indicator_block = ""
 
             if use_indicator_knowledge and not indicator_block:
-                context = self.indicator_knowledge.get_indicator_context(user_question)
+                context = indicator_knowledge.get_indicator_context(user_question)
                 detected_indicators = context["detected_indicators"]
                 indicator_block = context["indicator_block"]
         elif use_indicator_knowledge:
-            context = self.indicator_knowledge.get_indicator_context(user_question)
+            context = indicator_knowledge.get_indicator_context(user_question)
             detected_indicators = context["detected_indicators"]
             indicator_block = context["indicator_block"]
 
@@ -74,12 +105,13 @@ class ChatBISystem:
     def run(
         self,
         user_question: str,
-        use_few_shot: bool = True,
-        use_rules: bool = True,
-        use_guards: bool = True,
-        use_indicator_knowledge: bool = True,
-        use_schema_linking: bool = False,
-        use_indicator_rag: bool = False,
+        use_few_shot: bool | None = None,
+        use_rules: bool | None = None,
+        use_guards: bool | None = None,
+        use_indicator_knowledge: bool | None = None,
+        use_schema_linking: bool | None = None,
+        use_indicator_rag: bool | None = None,
+        source_id: str | None = None,
         security_context: UserContext | None = None,
     ) -> dict:
         """
@@ -98,11 +130,28 @@ class ChatBISystem:
         Returns:
             包含 SQL、结果或错误信息的字典
         """
+        runtime = self._get_runtime(source_id)
+        options = self._resolve_feature_options(
+            {
+                "use_few_shot": use_few_shot,
+                "use_rules": use_rules,
+                "use_guards": use_guards,
+                "use_indicator_knowledge": use_indicator_knowledge,
+                "use_schema_linking": use_schema_linking,
+                "use_indicator_rag": use_indicator_rag,
+            }
+        )
+        use_few_shot = options["use_few_shot"]
+        use_rules = options["use_rules"]
+        use_guards = options["use_guards"]
+        use_indicator_knowledge = options["use_indicator_knowledge"]
+        use_schema_linking = options["use_schema_linking"]
+        use_indicator_rag = options["use_indicator_rag"]
         user_context = security_context or UserContext.demo_admin()
 
         # 1. 解析问题
-        parsed = self.parser.parse(user_question)
-        if not self.parser.validate(parsed):
+        parsed = runtime.parser.parse(user_question)
+        if not runtime.parser.validate(parsed):
             return {
                 "success": False,
                 "error": "输入问题为空",
@@ -114,6 +163,7 @@ class ChatBISystem:
             user_question=user_question,
             use_indicator_knowledge=use_indicator_knowledge,
             use_indicator_rag=use_indicator_rag,
+            indicator_knowledge=runtime.indicator_knowledge,
         )
 
         # 3. 构造 Prompt（Schema Linking 在 build_prompt 内部处理）
@@ -128,7 +178,7 @@ class ChatBISystem:
 
         # 4. 生成 SQL
         try:
-            sql = self.llm.generate_sql(system_msg, prompt)
+            sql = runtime.llm.generate_sql(system_msg, prompt)
         except Exception as e:
             return {
                 "success": False,
@@ -142,6 +192,7 @@ class ChatBISystem:
                     "used_indicator_knowledge": use_indicator_knowledge,
                     "used_schema_linking": use_schema_linking,
                     "used_indicator_rag": use_indicator_rag,
+                    "source_id": runtime.source_id,
                     "security_role": user_context.role,
                     "security_region": user_context.region,
                 }
@@ -149,9 +200,9 @@ class ChatBISystem:
 
         # 5. 执行 SQL
         try:
-            columns, results = self.db.execute(sql, user=user_context)
-            db_info = getattr(self.db, "last_query_info", {})
-            formatted = self.formatter.format(columns, results)
+            columns, results = runtime.db.execute(sql, user=user_context)
+            db_info = getattr(runtime.db, "last_query_info", {})
+            formatted = runtime.formatter.format(columns, results)
             return {
                 "success": True,
                 "sql": sql,
@@ -167,6 +218,7 @@ class ChatBISystem:
                     "used_indicator_knowledge": use_indicator_knowledge,
                     "used_schema_linking": use_schema_linking,
                     "used_indicator_rag": use_indicator_rag,
+                    "source_id": runtime.source_id,
                     "security_role": user_context.role,
                     "security_region": user_context.region,
                     "row_count": len(results),
@@ -190,6 +242,7 @@ class ChatBISystem:
                     "used_indicator_knowledge": use_indicator_knowledge,
                     "used_schema_linking": use_schema_linking,
                     "used_indicator_rag": use_indicator_rag,
+                    "source_id": runtime.source_id,
                     "security_role": user_context.role,
                     "security_region": user_context.region,
                 }
@@ -209,6 +262,7 @@ class ChatBISystem:
                     "used_indicator_knowledge": use_indicator_knowledge,
                     "used_schema_linking": use_schema_linking,
                     "used_indicator_rag": use_indicator_rag,
+                    "source_id": runtime.source_id,
                     "security_role": user_context.role,
                     "security_region": user_context.region,
                     "db_duration_ms": e.metadata.get("duration_ms"),
@@ -231,6 +285,7 @@ class ChatBISystem:
                     "used_indicator_knowledge": use_indicator_knowledge,
                     "used_schema_linking": use_schema_linking,
                     "used_indicator_rag": use_indicator_rag,
+                    "source_id": runtime.source_id,
                     "security_role": user_context.role,
                     "security_region": user_context.region,
                 }
@@ -239,12 +294,13 @@ class ChatBISystem:
     def run_stream(
         self,
         user_question: str,
-        use_few_shot: bool = True,
-        use_rules: bool = True,
-        use_guards: bool = True,
-        use_indicator_knowledge: bool = True,
-        use_schema_linking: bool = False,
-        use_indicator_rag: bool = False,
+        use_few_shot: bool | None = None,
+        use_rules: bool | None = None,
+        use_guards: bool | None = None,
+        use_indicator_knowledge: bool | None = None,
+        use_schema_linking: bool | None = None,
+        use_indicator_rag: bool | None = None,
+        source_id: str | None = None,
         security_context: UserContext | None = None,
     ) -> Generator[str, None, None]:
         """
@@ -272,11 +328,28 @@ class ChatBISystem:
         Yields:
             SSE 格式的事件字符串
         """
+        runtime = self._get_runtime(source_id)
+        options = self._resolve_feature_options(
+            {
+                "use_few_shot": use_few_shot,
+                "use_rules": use_rules,
+                "use_guards": use_guards,
+                "use_indicator_knowledge": use_indicator_knowledge,
+                "use_schema_linking": use_schema_linking,
+                "use_indicator_rag": use_indicator_rag,
+            }
+        )
+        use_few_shot = options["use_few_shot"]
+        use_rules = options["use_rules"]
+        use_guards = options["use_guards"]
+        use_indicator_knowledge = options["use_indicator_knowledge"]
+        use_schema_linking = options["use_schema_linking"]
+        use_indicator_rag = options["use_indicator_rag"]
         user_context = security_context or UserContext.demo_admin()
 
         # 1. 解析问题
-        parsed = self.parser.parse(user_question)
-        if not self.parser.validate(parsed):
+        parsed = runtime.parser.parse(user_question)
+        if not runtime.parser.validate(parsed):
             yield _sse_event("error", {
                 "error": "输入问题为空",
                 "error_type": "validation"
@@ -288,6 +361,7 @@ class ChatBISystem:
             user_question=user_question,
             use_indicator_knowledge=use_indicator_knowledge,
             use_indicator_rag=use_indicator_rag,
+            indicator_knowledge=runtime.indicator_knowledge,
         )
 
         # 3. 构造 Prompt
@@ -303,7 +377,7 @@ class ChatBISystem:
         # 4. 流式生成 SQL —— 逐 chunk 推送（过滤空内容）
         sql_parts = []
         try:
-            for chunk_text in self.llm.generate_sql_stream(system_msg, prompt):
+            for chunk_text in runtime.llm.generate_sql_stream(system_msg, prompt):
                 if not chunk_text:
                     continue  # 跳过空 chunk（部分模型会返回空字符串的 delta）
                 sql_parts.append(chunk_text)
@@ -318,6 +392,7 @@ class ChatBISystem:
                     "used_indicator_knowledge": use_indicator_knowledge,
                     "used_schema_linking": use_schema_linking,
                     "used_indicator_rag": use_indicator_rag,
+                    "source_id": runtime.source_id,
                     "security_role": user_context.role,
                     "security_region": user_context.region,
                 }
@@ -332,8 +407,8 @@ class ChatBISystem:
 
         # 6. 执行 SQL
         try:
-            columns, results = self.db.execute(sql, user=user_context)
-            db_info = getattr(self.db, "last_query_info", {})
+            columns, results = runtime.db.execute(sql, user=user_context)
+            db_info = getattr(runtime.db, "last_query_info", {})
             rows_dict = [dict(zip(columns, row)) for row in results]
             yield _sse_event("result", {
                 "columns": columns,
@@ -348,6 +423,7 @@ class ChatBISystem:
                     "used_indicator_knowledge": use_indicator_knowledge,
                     "used_schema_linking": use_schema_linking,
                     "used_indicator_rag": use_indicator_rag,
+                    "source_id": runtime.source_id,
                     "security_role": user_context.role,
                     "security_region": user_context.region,
                     "db_duration_ms": db_info.get("duration_ms"),
@@ -366,6 +442,7 @@ class ChatBISystem:
                     "used_indicator_knowledge": use_indicator_knowledge,
                     "used_schema_linking": use_schema_linking,
                     "used_indicator_rag": use_indicator_rag,
+                    "source_id": runtime.source_id,
                     "security_role": user_context.role,
                     "security_region": user_context.region,
                 }
@@ -381,6 +458,7 @@ class ChatBISystem:
                     "used_indicator_knowledge": use_indicator_knowledge,
                     "used_schema_linking": use_schema_linking,
                     "used_indicator_rag": use_indicator_rag,
+                    "source_id": runtime.source_id,
                     "security_role": user_context.role,
                     "security_region": user_context.region,
                     "db_duration_ms": e.metadata.get("duration_ms"),
@@ -399,6 +477,7 @@ class ChatBISystem:
                     "used_indicator_knowledge": use_indicator_knowledge,
                     "used_schema_linking": use_schema_linking,
                     "used_indicator_rag": use_indicator_rag,
+                    "source_id": runtime.source_id,
                     "security_role": user_context.role,
                     "security_region": user_context.region,
                 }
