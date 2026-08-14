@@ -17,5 +17,5 @@ LLM_CONFIG = {
     "base_url": os.getenv("OPENAI_BASE_URL"),
     "embedding_model": os.getenv("EMBEDDING_MODEL"),
     "temperature": 0.2,
-    "max_tokens": 1024,
+    "max_tokens": int(os.getenv("LLM_MAX_TOKENS", 4000))
 }
