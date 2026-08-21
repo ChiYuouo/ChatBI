@@ -1,10 +1,6 @@
 import json
-from pathlib import Path
-import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from report_generator import ReportGenerator
+from chatbi.report_generator import ReportGenerator
 
 
 def sample_step_results() -> list[dict]:

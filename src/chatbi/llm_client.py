@@ -8,7 +8,7 @@ import re
 from typing import Generator
 
 from openai import OpenAI
-from config import LLM_CONFIG
+from chatbi.config import LLM_CONFIG
 
 
 class LLMClient:

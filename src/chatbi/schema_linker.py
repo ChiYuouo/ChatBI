@@ -10,9 +10,9 @@ Join 推理（join_resolver）三个模块串联为完整 Pipeline。
 替代原 prompt_builder.py 中的硬编码全量 Schema 注入方式。
 """
 
-from table_retriever import retrieve_tables, build_index
-from field_matcher import match_fields, build_field_index
-from join_resolver import (
+from chatbi.table_retriever import retrieve_tables, build_index
+from chatbi.field_matcher import match_fields, build_field_index
+from chatbi.join_resolver import (
     select_anchor,
     resolve_joins,
     STRONG_METRIC_WORDS,

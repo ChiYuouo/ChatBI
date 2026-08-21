@@ -8,11 +8,11 @@
 依赖安装：uv add langchain-openai langchain-chroma chromadb
 """
 
-import os
+from pathlib import Path
 from langchain_openai import OpenAIEmbeddings
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
-from config import LLM_CONFIG
+from chatbi.config import LLM_CONFIG
 
 
 # ==================== 表描述数据 ====================
@@ -106,7 +106,7 @@ TABLE_METADATA = {
 
 
 # ==================== ChromaDB 持久化目录 ====================
-CHROMA_PERSIST_DIR = os.path.join(os.path.dirname(__file__), "chroma_db", "tables")
+CHROMA_PERSIST_DIR = str(Path(__file__).resolve().parents[2] / "chroma_db" / "tables")
 
 
 def _cosine_relevance_score_fn(distance: float) -> float:

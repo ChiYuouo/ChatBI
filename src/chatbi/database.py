@@ -14,8 +14,8 @@ from typing import Any, Callable
 
 import pymysql
 
-from config import APP_CONFIG, DB_RUNTIME_CONFIG, get_database_source_config
-from security import QuerySecurityManager, UserContext
+from chatbi.config import APP_CONFIG, DB_RUNTIME_CONFIG, get_database_source_config
+from chatbi.security import QuerySecurityManager, UserContext
 
 logger = logging.getLogger("chatbi.database")
 

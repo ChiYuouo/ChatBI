@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from config import APP_CONFIG, get_database_source_config
-from database import DatabaseClient
-from indicator_knowledge import IndicatorKnowledge
-from llm_client import LLMClient
-from query_parser import QueryParser
-from result_formatter import ResultFormatter
+from chatbi.config import APP_CONFIG, get_database_source_config
+from chatbi.database import DatabaseClient
+from chatbi.indicator_knowledge import IndicatorKnowledge
+from chatbi.llm_client import LLMClient
+from chatbi.query_parser import QueryParser
+from chatbi.result_formatter import ResultFormatter
 
 
 @dataclass(slots=True)

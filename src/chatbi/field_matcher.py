@@ -10,12 +10,12 @@
 依赖安装：同第 15 课（langchain-openai, langchain-chroma, chromadb）
 """
 
-import os
+from pathlib import Path
 from langchain_openai import OpenAIEmbeddings
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
-from config import LLM_CONFIG
-from table_retriever import retrieve_tables
+from chatbi.config import LLM_CONFIG
+from chatbi.table_retriever import retrieve_tables
 
 
 # ==================== 字段描述数据 ====================
@@ -483,7 +483,7 @@ BUSINESS_RULES = [
 
 
 # ==================== ChromaDB 配置 ====================
-CHROMA_PERSIST_DIR = os.path.join(os.path.dirname(__file__), "chroma_db", "fields")
+CHROMA_PERSIST_DIR = str(Path(__file__).resolve().parents[2] / "chroma_db" / "fields")
 
 
 def _cosine_relevance_score_fn(distance: float) -> float:

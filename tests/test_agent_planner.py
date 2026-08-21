@@ -1,17 +1,13 @@
-from pathlib import Path
 import re
-import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from agent_planner import (
+from chatbi.agent_planner import (
     PlanAndExecuteAgent,
     PlanGenerator,
     ResultSummarizer,
     StepExecutor,
     TempTableResultStore,
 )
-from report_generator import ReportGenerator
+from chatbi.report_generator import ReportGenerator
 
 
 class FakeTempCursor:

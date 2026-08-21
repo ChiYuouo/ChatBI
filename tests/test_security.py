@@ -1,13 +1,8 @@
-from pathlib import Path
-import sys
-
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from main import ChatBISystem
-from database import DatabaseClient
-from security import QuerySecurityManager, SecurityError, UserContext
+from chatbi.database import DatabaseClient
+from chatbi.security import QuerySecurityManager, SecurityError, UserContext
+from chatbi.services.chatbi_service import ChatBISystem
 
 
 class FakeCursor:

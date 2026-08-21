@@ -1,11 +1,6 @@
-from pathlib import Path
-import sys
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-
 def test_resolve_query_options_uses_app_defaults_and_payload_overrides():
-    from api_service import QueryRequest, _resolve_query_options
+    from chatbi.api.dependencies import _resolve_query_options
+    from chatbi.api.schemas import QueryRequest
 
     payload = QueryRequest(
         question="查看利润",

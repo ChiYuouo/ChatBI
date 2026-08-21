@@ -1,12 +1,7 @@
-from pathlib import Path
-import sys
 from types import SimpleNamespace
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-
 def test_build_runtime_uses_requested_database_source(monkeypatch):
-    import runtime_factory
+    import chatbi.runtime_factory as runtime_factory
 
     captured = {}
 
@@ -51,8 +46,8 @@ def test_build_runtime_uses_requested_database_source(monkeypatch):
 
 
 def test_chatbi_system_run_uses_runtime_factory_for_source_id():
-    from main import ChatBISystem
-    from security import UserContext
+    from chatbi.security import UserContext
+    from chatbi.services.chatbi_service import ChatBISystem
 
     captured = {}
 

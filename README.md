@@ -70,7 +70,7 @@ DB_PASSWORD="your_mysql_password"
 DB_NAME="chatbi_mvp"
 ```
 
-建议为项目单独创建仅有 `SELECT` 权限的数据库账号。若启用 Schema Linking 或指标 RAG，可分别运行 `schema_linker.py`、`indicator_retriever.py` 初始化或重建本地向量索引。
+建议为项目单独创建仅有 `SELECT` 权限的数据库账号。若启用 Schema Linking 或指标 RAG，可分别运行 `uv run python -m chatbi.schema_linker`、`uv run python -m chatbi.indicator_retriever` 初始化或重建本地向量索引。
 
 ## API 示例
 

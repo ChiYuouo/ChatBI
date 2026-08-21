@@ -12,17 +12,18 @@
 复用第 15 课的 LangChain + ChromaDB 基础设施。
 """
 
-import os
 import json
+from pathlib import Path
 from langchain_openai import OpenAIEmbeddings
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
-from config import LLM_CONFIG
+from chatbi.config import LLM_CONFIG
 
 
 # ==================== 配置 ====================
-INDICATORS_FILE = os.path.join(os.path.dirname(__file__), "indicators_full.json")
-CHROMA_PERSIST_DIR = os.path.join(os.path.dirname(__file__), "chroma_db", "indicators")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+INDICATORS_FILE = str(PROJECT_ROOT / "indicators_full.json")
+CHROMA_PERSIST_DIR = str(PROJECT_ROOT / "chroma_db" / "indicators")
 
 
 def _cosine_relevance_score_fn(distance: float) -> float:
@@ -307,7 +308,7 @@ if __name__ == "__main__":
     print("=" * 60)
 
     # 模拟旧的关键词匹配
-    from indicator_knowledge import IndicatorKnowledge
+    from chatbi.indicator_knowledge import IndicatorKnowledge
     old_ik = IndicatorKnowledge()
 
     compare_questions = [
