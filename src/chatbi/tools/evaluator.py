@@ -11,8 +11,11 @@
   非主要指标）
 """
 
+import argparse
 import json
 import re
+from datetime import datetime
+from pathlib import Path
 from typing import Callable, Optional
 from chatbi.infrastructure.database import DatabaseClient
 
@@ -125,115 +128,205 @@ class Evaluator:
         ]
 
     def generate_report(self, results: list[dict]) -> str:
-        """
-        生成评估报告
-
-        Args:
-            results: evaluate_all 返回的结果列表
-
-        Returns:
-            格式化的文本报告
-        """
-
-        total = len(results)
-
-        execution_correct = sum(
-            1 for r in results if r["execution_match"]
-        )
-
-        exact_correct = sum(
-            1 for r in results if r["exact_match"]
-        )
-
-        error_count = sum(
-            1 for r in results if r["error"] is not None
-        )
-
-        # 按难度分类统计
-        categories = {}
-
-        for r in results:
-            cat = r["category"]
-
-            if cat not in categories:
-                categories[cat] = {
-                    "total": 0,
-                    "correct": 0,
-                    "error": 0
-                }
-
-            categories[cat]["total"] += 1
-
-            if r["execution_match"]:
-                categories[cat]["correct"] += 1
-
-            if r["error"]:
-                categories[cat]["error"] += 1
-
+        """生成适合终端快速阅读的文本摘要。"""
+        summary = self._summarize_results(results)
         lines = [
-            "=" * 60,
-            "ChatBI Text2SQL 评估报告",
-            "=" * 60,
-            f"总用例数：{total}",
-            f"Execution Accuracy：{execution_correct}/{total} = "
-            f"{execution_correct / total * 100:.1f}%",
-            f"Exact Match Accuracy：{exact_correct}/{total} = "
-            f"{exact_correct / total * 100:.1f}%",
-            f"执行失败数：{error_count}",
+            "=" * 64,
+            "ChatBI Text2SQL 评估摘要",
+            "=" * 64,
+            f"总用例：{summary['total']}",
+            f"执行正确：{summary['execution_correct']} "
+            f"({summary['execution_accuracy']:.1f}%)",
+            f"SQL 完全一致：{summary['exact_correct']} "
+            f"({summary['exact_accuracy']:.1f}%)",
+            f"执行失败：{summary['error_count']}",
+            f"结果不匹配：{summary['mismatch_count']}",
             "",
-            "按难度分类统计：",
+            "按难度统计：",
         ]
 
-        for cat in ["simple", "medium", "complex"]:
-            if cat in categories:
-                stat = categories[cat]
-
-                acc = (
-                    stat["correct"] / stat["total"] * 100
-                    if stat["total"] > 0
-                    else 0
-                )
-
-                lines.append(
-                    f" {cat:8s}: {stat['correct']}/{stat['total']} = "
-                    f"{acc:.1f}% (失败 {stat['error']})"
-                )
-
-        lines.extend(["", "详细结果："])
-
-        for r in results:
-            status = (
-                "通过"
-                if r["execution_match"]
-                else ("失败" if r["error"] else "不匹配")
-            )
-
+        for category in ["simple", "medium", "complex"]:
+            if category not in summary["categories"]:
+                continue
+            stat = summary["categories"][category]
             lines.append(
-                f"\n[{r['id']}] {r['category']:8s} | {status}"
+                f"  {category:8s} {stat['correct']:>2}/{stat['total']:<2} "
+                f"正确率 {stat['accuracy']:>5.1f}% | "
+                f"执行失败 {stat['error']}"
             )
 
-            lines.append(
-                f" 问题：{r['question']}"
-            )
-
-            if r["error"]:
-                lines.append(
-                    f" 错误：{r['error']}"
-                )
-            else:
-                lines.append(
-                    f" 生成 SQL：{r['generated_sql'][:80]}..."
-                )
-
-            if not r["execution_match"]:
-                lines.append(
-                    f" 预期行数："
-                    f"{r['detail'].get('expected_row_count', 'N/A')}, "
-                    f"生成行数："
-                    f"{r['detail'].get('generated_row_count', 'N/A')}"
-                )
+        failed_results = [result for result in results if not result["execution_match"]]
+        if failed_results:
+            lines.extend(["", "需要关注的用例："])
+            for result in failed_results:
+                status = "执行失败" if result["error"] else "结果不匹配"
+                lines.append(f"  [{result['id']}] {status} | {result['question']}")
+                if result["error"]:
+                    lines.append(f"      {result['error']}")
+        else:
+            lines.extend(["", "所有用例均通过。"])
 
         return "\n".join(lines)
+
+    def generate_markdown_report(self, results: list[dict]) -> str:
+        """生成可在 IDE 或 GitHub 中直接查看的 Markdown 报告。"""
+        summary = self._summarize_results(results)
+        lines = [
+            "# ChatBI Text-to-SQL 评估报告",
+            "",
+            f"> 生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            "",
+            "## 总体结果",
+            "",
+            "| 指标 | 数量 | 比例 |",
+            "|---|---:|---:|",
+            f"| 总用例 | {summary['total']} | 100.0% |",
+            f"| 执行结果正确 | {summary['execution_correct']} | {summary['execution_accuracy']:.1f}% |",
+            f"| SQL 完全一致 | {summary['exact_correct']} | {summary['exact_accuracy']:.1f}% |",
+            f"| 执行失败 | {summary['error_count']} | {summary['error_rate']:.1f}% |",
+            f"| 执行成功但结果不匹配 | {summary['mismatch_count']} | {summary['mismatch_rate']:.1f}% |",
+            "",
+            "## 自动总结",
+            "",
+            self._build_conclusion(summary),
+            "",
+            "## 按难度统计",
+            "",
+            "| 难度 | 正确 | 总数 | 正确率 | 执行失败 |",
+            "|---|---:|---:|---:|---:|",
+        ]
+
+        for category in ["simple", "medium", "complex"]:
+            if category not in summary["categories"]:
+                continue
+            stat = summary["categories"][category]
+            lines.append(
+                f"| {category} | {stat['correct']} | {stat['total']} | "
+                f"{stat['accuracy']:.1f}% | {stat['error']} |"
+            )
+
+        lines.extend([
+            "",
+            "## 用例明细",
+            "",
+            "| ID | 难度 | 状态 | 问题 | 预期行数 | 生成行数 |",
+            "|---|---|---|---|---:|---:|",
+        ])
+
+        for result in results:
+            status = self._result_status(result)
+            detail = result.get("detail", {})
+            lines.append(
+                f"| {result['id']} | {result['category']} | {status} | "
+                f"{self._escape_markdown(result['question'])} | "
+                f"{detail.get('expected_row_count', 'N/A')} | "
+                f"{detail.get('generated_row_count', 'N/A')} |"
+            )
+
+        failed_results = [result for result in results if not result["execution_match"]]
+        if failed_results:
+            lines.extend(["", "## 失败与不匹配详情", ""])
+            for result in failed_results:
+                lines.extend([
+                    f"### {result['id']} · {self._escape_markdown(result['question'])}",
+                    "",
+                    f"- 难度：`{result['category']}`",
+                    f"- 状态：{self._result_status(result)}",
+                ])
+                if result["error"]:
+                    lines.append(f"- 错误：{self._escape_markdown(result['error'])}")
+                lines.extend([
+                    "",
+                    "预期 SQL：",
+                    "",
+                    "```sql",
+                    result.get("expected_sql") or "",
+                    "```",
+                    "",
+                    "生成 SQL：",
+                    "",
+                    "```sql",
+                    result.get("generated_sql") or "未生成",
+                    "```",
+                    "",
+                ])
+
+        return "\n".join(lines)
+
+    def save_markdown_report(self, results: list[dict], output_path: str) -> Path:
+        """保存 Markdown 报告，并自动创建父目录。"""
+        path = Path(output_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self.generate_markdown_report(results), encoding="utf-8")
+        return path
+
+    def _summarize_results(self, results: list[dict]) -> dict:
+        total = len(results)
+        execution_correct = sum(1 for result in results if result["execution_match"])
+        exact_correct = sum(1 for result in results if result["exact_match"])
+        error_count = sum(1 for result in results if result["error"] is not None)
+        mismatch_count = total - execution_correct - error_count
+        categories = {}
+
+        for result in results:
+            category = result["category"]
+            stat = categories.setdefault(category, {"total": 0, "correct": 0, "error": 0})
+            stat["total"] += 1
+            stat["correct"] += int(result["execution_match"])
+            stat["error"] += int(result["error"] is not None)
+
+        for stat in categories.values():
+            stat["accuracy"] = self._percentage(stat["correct"], stat["total"])
+
+        return {
+            "total": total,
+            "execution_correct": execution_correct,
+            "execution_accuracy": self._percentage(execution_correct, total),
+            "exact_correct": exact_correct,
+            "exact_accuracy": self._percentage(exact_correct, total),
+            "error_count": error_count,
+            "error_rate": self._percentage(error_count, total),
+            "mismatch_count": mismatch_count,
+            "mismatch_rate": self._percentage(mismatch_count, total),
+            "categories": categories,
+        }
+
+    @staticmethod
+    def _percentage(value: int, total: int) -> float:
+        return value / total * 100 if total else 0.0
+
+    @staticmethod
+    def _result_status(result: dict) -> str:
+        if result["execution_match"]:
+            return "✅ 通过"
+        if result["error"]:
+            return "❌ 执行失败"
+        return "⚠️ 结果不匹配"
+
+    @staticmethod
+    def _escape_markdown(value: str) -> str:
+        return str(value).replace("|", "\\|").replace("\n", "<br>")
+
+    @staticmethod
+    def _build_conclusion(summary: dict) -> str:
+        accuracy = summary["execution_accuracy"]
+        if accuracy >= 90:
+            conclusion = "整体执行准确率较高，可以重点检查少量失败用例。"
+        elif accuracy >= 70:
+            conclusion = "整体已具备基础可用性，但仍需针对薄弱难度继续优化。"
+        else:
+            conclusion = "当前准确率仍有明显提升空间，建议优先处理执行失败和复杂查询。"
+
+        if summary["categories"]:
+            weakest = min(
+                summary["categories"].items(),
+                key=lambda item: item[1]["accuracy"],
+            )
+            conclusion += (
+                f" 当前最薄弱的难度是 **{weakest[0]}**，"
+                f"正确率为 **{weakest[1]['accuracy']:.1f}%**。"
+            )
+        return conclusion
 
     def _normalize_sql(self, sql: str) -> str:
         """标准化 SQL 字符串，用于 Exact Match 比较"""
@@ -411,14 +504,16 @@ class Evaluator:
 
 def run_evaluation(
     sql_generator: Callable[[str], str],
-    test_cases_path: str = "test_cases.json"
-) -> None:
+    test_cases_path: str = "data/test_cases.json",
+    report_path: str | None = "reports/evaluation_report.md",
+) -> list[dict]:
     """
     运行完整评估流程并打印报告
 
     Args:
         sql_generator: SQL 生成函数
         test_cases_path: 测试用例文件路径
+        report_path: Markdown 报告路径；传入 None 时不保存
     """
 
     evaluator = Evaluator()
@@ -427,22 +522,37 @@ def run_evaluation(
         test_cases_path
     )
 
-    cases = cases[-2:]
+    # cases = cases[-2:]
 
     results = evaluator.evaluate_all(
         cases,
         sql_generator
     )
 
-    print(
-        evaluator.generate_report(results)
-    )
+    print(evaluator.generate_report(results))
+
+    if report_path:
+        saved_path = evaluator.save_markdown_report(results, report_path)
+        print(f"\nMarkdown 报告：{saved_path.resolve()}")
+
+    return results
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="运行 ChatBI Text-to-SQL 评估")
+    parser.add_argument(
+        "test_cases",
+        nargs="?",
+        default="data/test_cases.json",
+        help="测试用例 JSON 路径",
+    )
+    parser.add_argument(
+        "--report",
+        default="reports/evaluation_report.md",
+        help="Markdown 报告输出路径",
+    )
+    args = parser.parse_args()
 
-    # 示例：使用系统默认方式生成 SQL 进行自测
-    import sys
     from chatbi.infrastructure.llm_client import LLMClient
     from chatbi.text2sql.prompt_builder import build_prompt
 
@@ -460,13 +570,8 @@ if __name__ == "__main__":
             prompt
         )
 
-    path = (
-        sys.argv[1]
-        if len(sys.argv) > 1
-        else "data/test_cases.json"
-    )
-
     run_evaluation(
         generate_sql,
-        path
+        args.test_cases,
+        report_path=args.report,
     )

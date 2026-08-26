@@ -33,6 +33,7 @@ htmlcov/
 # Logs and local data
 *.log
 *.sqlite3
+reports/
 
 # OS files
 .DS_Store

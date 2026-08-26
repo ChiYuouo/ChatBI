@@ -104,6 +104,14 @@ curl -X POST http://localhost:8000/api/v1/query \
 uv run pytest -q
 ```
 
+运行 Text-to-SQL 测评并生成 Markdown 报告：
+
+```powershell
+uv run python -m chatbi.tools.evaluator --report reports/evaluation_report.md
+```
+
+终端会显示总体摘要，完整报告保存在 `reports/evaluation_report.md`。
+
 ## 技术栈
 
 Python · FastAPI · OpenAI API · MySQL · ChromaDB · LangChain · 原生 HTML/CSS/JavaScript

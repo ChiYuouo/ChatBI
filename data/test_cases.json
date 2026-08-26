@@ -75,5 +75,278 @@
     "question": "查询上个月的利润",
     "expected_sql": "SELECT (SUM(o.net_amount * r.rate_to_cny) - SUM((p.material_cost + p.labor_cost) * o.quantity)) - (SELECT SUM(rd_expense + selling_expense + admin_expense + finance_expense) FROM finance_expenses WHERE expense_date >= DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 MONTH), '%Y-%m-01') AND expense_date < DATE_FORMAT(CURDATE(), '%Y-%m-01')) AS profit FROM sales_orders o JOIN dim_products p ON o.product_id = p.product_id JOIN exchange_rates r ON o.order_date = r.rate_date AND o.currency = r.currency WHERE o.order_status = 'completed' AND o.order_date >= DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 MONTH), '%Y-%m-01') AND o.order_date < DATE_FORMAT(CURDATE(), '%Y-%m-01')",
     "description": "利润计算：毛利-期间费用，需跨四表+子查询+时间对齐"
+  },
+  {
+    "id": "S04",
+    "category": "simple",
+    "question": "查询待处理订单的总数量",
+    "expected_sql": "SELECT COUNT(*) AS pending_count FROM sales_orders WHERE order_status = 'pending'",
+    "description": "单表计数+订单状态过滤"
+  },
+  {
+    "id": "S05",
+    "category": "simple",
+    "question": "查询 2026 年第二季度取消的订单数量",
+    "expected_sql": "SELECT COUNT(*) AS cancelled_count FROM sales_orders WHERE order_status = 'cancelled' AND order_date >= '2026-04-01' AND order_date < '2026-07-01'",
+    "description": "单表计数+固定季度+状态过滤"
+  },
+  {
+    "id": "S06",
+    "category": "simple",
+    "question": "查询所有产品的平均标准成本",
+    "expected_sql": "SELECT AVG(standard_cost) AS avg_standard_cost FROM dim_products",
+    "description": "单表平均值聚合"
+  },
+  {
+    "id": "S07",
+    "category": "simple",
+    "question": "查询已完成订单涉及多少种币种",
+    "expected_sql": "SELECT COUNT(DISTINCT currency) AS currency_count FROM sales_orders WHERE order_status = 'completed'",
+    "description": "单表过滤+去重计数"
+  },
+  {
+    "id": "S08",
+    "category": "simple",
+    "question": "查询已完成订单中最大的不含税金额",
+    "expected_sql": "SELECT MAX(net_amount) AS max_net_amount FROM sales_orders WHERE order_status = 'completed'",
+    "description": "单表过滤+最大值聚合"
+  },
+  {
+    "id": "S09",
+    "category": "simple",
+    "question": "查询 2026 年 5 月已完成订单的总业务数量",
+    "expected_sql": "SELECT SUM(quantity) AS total_quantity FROM sales_orders WHERE order_status = 'completed' AND order_date >= '2026-05-01' AND order_date < '2026-06-01'",
+    "description": "单表时间过滤+数量聚合"
+  },
+  {
+    "id": "S10",
+    "category": "simple",
+    "question": "查询德国客户数量",
+    "expected_sql": "SELECT COUNT(*) AS customer_count FROM dim_customers WHERE country = 'Germany'",
+    "description": "客户维度单表过滤"
+  },
+  {
+    "id": "S11",
+    "category": "simple",
+    "question": "查询欧洲大区客户数量",
+    "expected_sql": "SELECT COUNT(*) AS customer_count FROM dim_customers WHERE region = '欧洲'",
+    "description": "客户区域单表过滤"
+  },
+  {
+    "id": "S12",
+    "category": "simple",
+    "question": "查询 2026 年第一季度管理费用总额",
+    "expected_sql": "SELECT SUM(admin_expense) AS total_admin_expense FROM finance_expenses WHERE expense_date >= '2026-01-01' AND expense_date < '2026-04-01'",
+    "description": "费用单表时间过滤+聚合"
+  },
+  {
+    "id": "S13",
+    "category": "simple",
+    "question": "查询产品中的最低材料成本",
+    "expected_sql": "SELECT MIN(material_cost) AS min_material_cost FROM dim_products",
+    "description": "产品成本最小值聚合"
+  },
+  {
+    "id": "S14",
+    "category": "simple",
+    "question": "查询固态电池技术路线的产品数量",
+    "expected_sql": "SELECT COUNT(*) AS product_count FROM dim_products WHERE tech_route = '固态电池'",
+    "description": "产品技术路线过滤+计数"
+  },
+  {
+    "id": "S15",
+    "category": "simple",
+    "question": "查询 2026 年第二季度已完成订单的折扣总额",
+    "expected_sql": "SELECT SUM(discount_amount) AS total_discount FROM sales_orders WHERE order_status = 'completed' AND order_date >= '2026-04-01' AND order_date < '2026-07-01'",
+    "description": "订单时间与状态过滤+折扣聚合"
+  },
+  {
+    "id": "M04",
+    "category": "medium",
+    "question": "按订单状态统计订单数量",
+    "expected_sql": "SELECT order_status, COUNT(*) AS order_count FROM sales_orders GROUP BY order_status",
+    "description": "单表分组计数"
+  },
+  {
+    "id": "M05",
+    "category": "medium",
+    "question": "按大区统计客户数量",
+    "expected_sql": "SELECT region, COUNT(*) AS customer_count FROM dim_customers GROUP BY region",
+    "description": "客户维度分组计数"
+  },
+  {
+    "id": "M06",
+    "category": "medium",
+    "question": "按月统计 2026 年第二季度已完成订单数量",
+    "expected_sql": "SELECT DATE_FORMAT(order_date, '%Y-%m') AS month, COUNT(*) AS order_count FROM sales_orders WHERE order_status = 'completed' AND order_date >= '2026-04-01' AND order_date < '2026-07-01' GROUP BY DATE_FORMAT(order_date, '%Y-%m')",
+    "description": "时间派生维度+分组聚合"
+  },
+  {
+    "id": "M07",
+    "category": "medium",
+    "question": "按产品线统计已完成订单的总业务数量",
+    "expected_sql": "SELECT p.product_line, SUM(o.quantity) AS total_quantity FROM sales_orders o JOIN dim_products p ON o.product_id = p.product_id WHERE o.order_status = 'completed' GROUP BY p.product_line",
+    "description": "两表 Join+产品线分组+数量聚合"
+  },
+  {
+    "id": "M08",
+    "category": "medium",
+    "question": "按技术路线统计已完成订单的平均单价",
+    "expected_sql": "SELECT p.tech_route, AVG(o.unit_price) AS avg_unit_price FROM sales_orders o JOIN dim_products p ON o.product_id = p.product_id WHERE o.order_status = 'completed' GROUP BY p.tech_route",
+    "description": "两表 Join+技术路线分组+平均值"
+  },
+  {
+    "id": "M09",
+    "category": "medium",
+    "question": "按部门统计 2026 年第一季度期间费用总额",
+    "expected_sql": "SELECT department, SUM(rd_expense + selling_expense + admin_expense + finance_expense) AS total_expense FROM finance_expenses WHERE expense_date >= '2026-01-01' AND expense_date < '2026-04-01' GROUP BY department",
+    "description": "部门分组+多费用字段计算"
+  },
+  {
+    "id": "M10",
+    "category": "medium",
+    "question": "查询 2026 年第二季度原币收入最高的 5 个客户",
+    "expected_sql": "SELECT c.customer_name, SUM(o.net_amount) AS total_revenue FROM sales_orders o JOIN dim_customers c ON o.customer_id = c.customer_id WHERE o.order_status = 'completed' AND o.order_date >= '2026-04-01' AND o.order_date < '2026-07-01' GROUP BY c.customer_name ORDER BY total_revenue DESC LIMIT 5",
+    "description": "两表 Join+客户分组+排序+Top N"
+  },
+  {
+    "id": "M11",
+    "category": "medium",
+    "question": "按产品分类统计 2026 年第二季度已完成订单的原币含税总额",
+    "expected_sql": "SELECT p.category, SUM(o.gross_amount) AS total_gross_amount FROM sales_orders o JOIN dim_products p ON o.product_id = p.product_id WHERE o.order_status = 'completed' AND o.order_date >= '2026-04-01' AND o.order_date < '2026-07-01' GROUP BY p.category",
+    "description": "两表 Join+产品分类+含税金额聚合"
+  },
+  {
+    "id": "M12",
+    "category": "medium",
+    "question": "按月统计 2026 年第一季度期间费用",
+    "expected_sql": "SELECT DATE_FORMAT(expense_date, '%Y-%m') AS month, SUM(rd_expense + selling_expense + admin_expense + finance_expense) AS total_expense FROM finance_expenses WHERE expense_date >= '2026-01-01' AND expense_date < '2026-04-01' GROUP BY DATE_FORMAT(expense_date, '%Y-%m')",
+    "description": "月度费用趋势统计"
+  },
+  {
+    "id": "M13",
+    "category": "medium",
+    "question": "按国家统计有已完成订单的不同客户数",
+    "expected_sql": "SELECT c.country, COUNT(DISTINCT o.customer_id) AS customer_count FROM sales_orders o JOIN dim_customers c ON o.customer_id = c.customer_id WHERE o.order_status = 'completed' GROUP BY c.country",
+    "description": "两表 Join+国家分组+客户去重"
+  },
+  {
+    "id": "M14",
+    "category": "medium",
+    "question": "按币种统计已完成订单数量",
+    "expected_sql": "SELECT currency, COUNT(*) AS order_count FROM sales_orders WHERE order_status = 'completed' GROUP BY currency",
+    "description": "币种分组+状态过滤"
+  },
+  {
+    "id": "M15",
+    "category": "medium",
+    "question": "按产品线统计已完成订单的平均折扣金额",
+    "expected_sql": "SELECT p.product_line, AVG(o.discount_amount) AS avg_discount FROM sales_orders o JOIN dim_products p ON o.product_id = p.product_id WHERE o.order_status = 'completed' GROUP BY p.product_line",
+    "description": "两表 Join+产品线分组+折扣平均值"
+  },
+  {
+    "id": "M16",
+    "category": "medium",
+    "question": "按客户行业统计已完成订单数量",
+    "expected_sql": "SELECT c.industry, COUNT(*) AS order_count FROM sales_orders o JOIN dim_customers c ON o.customer_id = c.customer_id WHERE o.order_status = 'completed' GROUP BY c.industry",
+    "description": "两表 Join+行业分组计数"
+  },
+  {
+    "id": "M17",
+    "category": "medium",
+    "question": "按产品线统计已完成订单的平均业务数量",
+    "expected_sql": "SELECT p.product_line, AVG(o.quantity) AS avg_quantity FROM sales_orders o JOIN dim_products p ON o.product_id = p.product_id WHERE o.order_status = 'completed' GROUP BY p.product_line",
+    "description": "两表 Join+产品线分组+平均数量"
+  },
+  {
+    "id": "M18",
+    "category": "medium",
+    "question": "查询欧洲市场 2026 年第二季度已完成订单的原币平均金额",
+    "expected_sql": "SELECT AVG(o.net_amount) AS avg_order_amount FROM sales_orders o JOIN dim_customers c ON o.customer_id = c.customer_id WHERE c.region = '欧洲' AND o.order_status = 'completed' AND o.order_date >= '2026-04-01' AND o.order_date < '2026-07-01'",
+    "description": "两表 Join+区域与时间过滤+平均值"
+  },
+  {
+    "id": "M19",
+    "category": "medium",
+    "question": "查询材料成本最高的 10 个产品",
+    "expected_sql": "SELECT product_name, material_cost FROM dim_products ORDER BY material_cost DESC LIMIT 10",
+    "description": "产品成本排序+Top N"
+  },
+  {
+    "id": "M20",
+    "category": "medium",
+    "question": "按部门统计 2026 年第二季度销售费用",
+    "expected_sql": "SELECT department, SUM(selling_expense) AS total_selling_expense FROM finance_expenses WHERE expense_date >= '2026-04-01' AND expense_date < '2026-07-01' GROUP BY department",
+    "description": "部门分组+时间过滤+销售费用聚合"
+  },
+  {
+    "id": "C04",
+    "category": "complex",
+    "question": "查询 2026 年 5 月人民币口径的毛利",
+    "expected_sql": "SELECT SUM(o.net_amount * r.rate_to_cny) - SUM((p.material_cost + p.labor_cost) * o.quantity) AS gross_profit FROM sales_orders o JOIN dim_products p ON o.product_id = p.product_id JOIN exchange_rates r ON o.order_date = r.rate_date AND o.currency = r.currency WHERE o.order_status = 'completed' AND o.order_date >= '2026-05-01' AND o.order_date < '2026-06-01'",
+    "description": "三表 Join+汇率转换+固定月份+毛利计算"
+  },
+  {
+    "id": "C05",
+    "category": "complex",
+    "question": "查询 2026 年 5 月的利润",
+    "expected_sql": "SELECT (SUM(o.net_amount * r.rate_to_cny) - SUM((p.material_cost + p.labor_cost) * o.quantity)) - (SELECT SUM(rd_expense + selling_expense + admin_expense + finance_expense) FROM finance_expenses WHERE expense_date >= '2026-05-01' AND expense_date < '2026-06-01') AS profit FROM sales_orders o JOIN dim_products p ON o.product_id = p.product_id JOIN exchange_rates r ON o.order_date = r.rate_date AND o.currency = r.currency WHERE o.order_status = 'completed' AND o.order_date >= '2026-05-01' AND o.order_date < '2026-06-01'",
+    "description": "跨四表+子查询+固定月份利润计算"
+  },
+  {
+    "id": "C06",
+    "category": "complex",
+    "question": "按产品线统计 2026 年第二季度人民币口径毛利率",
+    "expected_sql": "SELECT p.product_line, (SUM(o.net_amount * r.rate_to_cny) - SUM((p.material_cost + p.labor_cost) * o.quantity)) / NULLIF(SUM(o.net_amount * r.rate_to_cny), 0) AS gross_margin FROM sales_orders o JOIN dim_products p ON o.product_id = p.product_id JOIN exchange_rates r ON o.order_date = r.rate_date AND o.currency = r.currency WHERE o.order_status = 'completed' AND o.order_date >= '2026-04-01' AND o.order_date < '2026-07-01' GROUP BY p.product_line",
+    "description": "三表 Join+分组+汇率转换+比率计算"
+  },
+  {
+    "id": "C07",
+    "category": "complex",
+    "question": "按月统计 2026 年第二季度人民币收入",
+    "expected_sql": "SELECT DATE_FORMAT(o.order_date, '%Y-%m') AS month, SUM(o.net_amount * r.rate_to_cny) AS revenue_cny FROM sales_orders o JOIN exchange_rates r ON o.order_date = r.rate_date AND o.currency = r.currency WHERE o.order_status = 'completed' AND o.order_date >= '2026-04-01' AND o.order_date < '2026-07-01' GROUP BY DATE_FORMAT(o.order_date, '%Y-%m') ORDER BY month",
+    "description": "两表 Join+汇率转换+月份分组+排序"
+  },
+  {
+    "id": "C08",
+    "category": "complex",
+    "question": "查询从未下过订单的客户",
+    "expected_sql": "SELECT c.customer_id, c.customer_name FROM dim_customers c LEFT JOIN sales_orders o ON c.customer_id = o.customer_id WHERE o.order_id IS NULL",
+    "description": "LEFT JOIN+空值过滤+反连接"
+  },
+  {
+    "id": "C09",
+    "category": "complex",
+    "question": "查询从未产生已完成订单的产品",
+    "expected_sql": "SELECT p.product_id, p.product_name FROM dim_products p LEFT JOIN sales_orders o ON p.product_id = o.product_id AND o.order_status = 'completed' WHERE o.order_id IS NULL",
+    "description": "带状态条件的 LEFT JOIN+反连接"
+  },
+  {
+    "id": "C10",
+    "category": "complex",
+    "question": "按客户类型统计 2026 年第二季度人民币口径毛利",
+    "expected_sql": "SELECT c.customer_type, SUM(o.net_amount * r.rate_to_cny) - SUM((p.material_cost + p.labor_cost) * o.quantity) AS gross_profit FROM sales_orders o JOIN dim_customers c ON o.customer_id = c.customer_id JOIN dim_products p ON o.product_id = p.product_id JOIN exchange_rates r ON o.order_date = r.rate_date AND o.currency = r.currency WHERE o.order_status = 'completed' AND o.order_date >= '2026-04-01' AND o.order_date < '2026-07-01' GROUP BY c.customer_type",
+    "description": "四表 Join+客户类型分组+毛利计算"
+  },
+  {
+    "id": "C11",
+    "category": "complex",
+    "question": "查询 2026 年第二季度人民币毛利最高的 3 个国家",
+    "expected_sql": "SELECT c.country, SUM(o.net_amount * r.rate_to_cny) - SUM((p.material_cost + p.labor_cost) * o.quantity) AS gross_profit FROM sales_orders o JOIN dim_customers c ON o.customer_id = c.customer_id JOIN dim_products p ON o.product_id = p.product_id JOIN exchange_rates r ON o.order_date = r.rate_date AND o.currency = r.currency WHERE o.order_status = 'completed' AND o.order_date >= '2026-04-01' AND o.order_date < '2026-07-01' GROUP BY c.country ORDER BY gross_profit DESC LIMIT 3",
+    "description": "四表 Join+毛利计算+国家排序+Top N"
+  },
+  {
+    "id": "C12",
+    "category": "complex",
+    "question": "统计 2026 年第二季度各大区人民币收入及其占比，并按收入降序排列",
+    "expected_sql": "WITH region_revenue AS (SELECT c.region, SUM(o.net_amount * r.rate_to_cny) AS revenue_cny FROM sales_orders o JOIN dim_customers c ON o.customer_id = c.customer_id JOIN exchange_rates r ON o.order_date = r.rate_date AND o.currency = r.currency WHERE o.order_status = 'completed' AND o.order_date >= '2026-04-01' AND o.order_date < '2026-07-01' GROUP BY c.region) SELECT region, revenue_cny, revenue_cny / NULLIF(SUM(revenue_cny) OVER (), 0) AS revenue_share FROM region_revenue ORDER BY revenue_cny DESC",
+    "description": "CTE+窗口函数+收入占比+排序"
+  },
+  {
+    "id": "C13",
+    "category": "complex",
+    "question": "按产品线统计 2026 年第二季度已完成和已取消订单数量",
+    "expected_sql": "SELECT p.product_line, SUM(CASE WHEN o.order_status = 'completed' THEN 1 ELSE 0 END) AS completed_count, SUM(CASE WHEN o.order_status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled_count FROM sales_orders o JOIN dim_products p ON o.product_id = p.product_id WHERE o.order_date >= '2026-04-01' AND o.order_date < '2026-07-01' GROUP BY p.product_line",
+    "description": "两表 Join+条件聚合+多指标统计"
   }
 ]
