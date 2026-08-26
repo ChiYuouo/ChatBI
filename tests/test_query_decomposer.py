@@ -1,6 +1,6 @@
 import json
 
-from chatbi.query_decomposer import QueryDecomposer, build_decomposition_prompt
+from chatbi.analysis.query_decomposer import QueryDecomposer, build_decomposition_prompt
 
 
 def test_build_decomposition_prompt_includes_schema_and_indicator_catalog():

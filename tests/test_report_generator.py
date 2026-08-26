@@ -1,6 +1,6 @@
 import json
 
-from chatbi.report_generator import ReportGenerator
+from chatbi.analysis.report_generator import ReportGenerator
 
 
 def sample_step_results() -> list[dict]:

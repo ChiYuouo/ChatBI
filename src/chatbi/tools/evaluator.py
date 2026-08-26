@@ -14,7 +14,7 @@
 import json
 import re
 from typing import Callable, Optional
-from chatbi.database import DatabaseClient
+from chatbi.infrastructure.database import DatabaseClient
 
 
 class Evaluator:
@@ -443,8 +443,8 @@ if __name__ == "__main__":
 
     # 示例：使用系统默认方式生成 SQL 进行自测
     import sys
-    from chatbi.prompt_builder import build_prompt
-    from chatbi.llm_client import LLMClient
+    from chatbi.infrastructure.llm_client import LLMClient
+    from chatbi.text2sql.prompt_builder import build_prompt
 
     llm = LLMClient()
 

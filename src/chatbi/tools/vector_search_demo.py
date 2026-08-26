@@ -7,7 +7,7 @@
 """
 
 import numpy as np
-from chatbi.llm_client import LLMClient
+from chatbi.infrastructure.llm_client import LLMClient
 
 
 # ==================== 1. 表描述数据 ====================

@@ -17,11 +17,11 @@ from pathlib import Path
 from langchain_openai import OpenAIEmbeddings
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
-from chatbi.config import LLM_CONFIG
+from chatbi.core.config import LLM_CONFIG
 
 
 # ==================== 配置 ====================
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 INDICATORS_FILE = str(PROJECT_ROOT / "indicators_full.json")
 CHROMA_PERSIST_DIR = str(PROJECT_ROOT / "chroma_db" / "indicators")
 
@@ -308,7 +308,7 @@ if __name__ == "__main__":
     print("=" * 60)
 
     # 模拟旧的关键词匹配
-    from chatbi.indicator_knowledge import IndicatorKnowledge
+    from chatbi.retrieval.indicator_knowledge import IndicatorKnowledge
     old_ik = IndicatorKnowledge()
 
     compare_questions = [

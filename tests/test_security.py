@@ -1,7 +1,7 @@
 import pytest
 
-from chatbi.database import DatabaseClient
-from chatbi.security import QuerySecurityManager, SecurityError, UserContext
+from chatbi.core.security import QuerySecurityManager, SecurityError, UserContext
+from chatbi.infrastructure.database import DatabaseClient
 from chatbi.services.chatbi_service import ChatBISystem
 
 

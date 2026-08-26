@@ -1,13 +1,13 @@
 import re
 
-from chatbi.agent_planner import (
+from chatbi.analysis.agent_planner import (
     PlanAndExecuteAgent,
     PlanGenerator,
     ResultSummarizer,
     StepExecutor,
     TempTableResultStore,
 )
-from chatbi.report_generator import ReportGenerator
+from chatbi.analysis.report_generator import ReportGenerator
 
 
 class FakeTempCursor:

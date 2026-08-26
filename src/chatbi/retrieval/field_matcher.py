@@ -14,8 +14,8 @@ from pathlib import Path
 from langchain_openai import OpenAIEmbeddings
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
-from chatbi.config import LLM_CONFIG
-from chatbi.table_retriever import retrieve_tables
+from chatbi.core.config import LLM_CONFIG
+from chatbi.retrieval.table_retriever import retrieve_tables
 
 
 # ==================== 字段描述数据 ====================
@@ -483,7 +483,7 @@ BUSINESS_RULES = [
 
 
 # ==================== ChromaDB 配置 ====================
-CHROMA_PERSIST_DIR = str(Path(__file__).resolve().parents[2] / "chroma_db" / "fields")
+CHROMA_PERSIST_DIR = str(Path(__file__).resolve().parents[3] / "chroma_db" / "fields")
 
 
 def _cosine_relevance_score_fn(distance: float) -> float:

@@ -15,8 +15,8 @@ from typing import Any, Callable
 
 from pydantic import BaseModel, Field
 
-from chatbi.config import LLM_CONFIG
-from chatbi.llm_client import LLMClient
+from chatbi.core.config import LLM_CONFIG
+from chatbi.infrastructure.llm_client import LLMClient
 
 
 ReportTextGenerator = Callable[[str, str], str]

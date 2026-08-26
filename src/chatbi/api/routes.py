@@ -13,7 +13,7 @@ from chatbi.api.dependencies import (
     system,
 )
 from chatbi.api.schemas import ErrorResponse, HealthResponse, QueryRequest, QuerySuccessResponse
-from chatbi.config import APP_CONFIG
+from chatbi.core.config import APP_CONFIG
 
 logger = logging.getLogger("chatbi.api")
 router = APIRouter()

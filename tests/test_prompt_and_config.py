@@ -1,5 +1,5 @@
-from chatbi.llm_client import LLMClient
-from chatbi.prompt_builder import build_prompt
+from chatbi.infrastructure.llm_client import LLMClient
+from chatbi.text2sql.prompt_builder import build_prompt
 
 
 def test_build_prompt_keeps_curdate_rule_for_recent_months():

@@ -26,6 +26,22 @@ flowchart LR
     H --> I[Web / API / CLI]
 ```
 
+## 目录结构
+
+```text
+src/chatbi/
+├── analysis/        # 复杂问题拆解、执行计划与分析报告
+├── api/             # FastAPI 应用、路由、依赖和数据模型
+├── bootstrap/       # 应用运行时与依赖装配
+├── core/            # 配置和安全策略
+├── infrastructure/ # 数据库与大模型客户端
+├── retrieval/      # 表、字段、指标、Join 和 Schema 检索
+├── services/       # ChatBI 核心业务流程
+├── text2sql/       # 问题解析、Prompt 构造和结果格式化
+├── tools/          # 评测、初始化和演示脚本
+└── cli.py          # 命令行入口
+```
+
 ## 快速开始
 
 要求：Python 3.12+、MySQL，以及一个 OpenAI 兼容的模型服务。
@@ -70,7 +86,7 @@ DB_PASSWORD="your_mysql_password"
 DB_NAME="chatbi_mvp"
 ```
 
-建议为项目单独创建仅有 `SELECT` 权限的数据库账号。若启用 Schema Linking 或指标 RAG，可分别运行 `uv run python -m chatbi.schema_linker`、`uv run python -m chatbi.indicator_retriever` 初始化或重建本地向量索引。
+建议为项目单独创建仅有 `SELECT` 权限的数据库账号。若启用 Schema Linking 或指标 RAG，可分别运行 `uv run python -m chatbi.retrieval.schema_linker`、`uv run python -m chatbi.retrieval.indicator_retriever` 初始化或重建本地向量索引。
 
 ## API 示例
 

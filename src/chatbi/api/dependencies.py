@@ -5,8 +5,8 @@ from typing import Any
 from fastapi import Request
 
 from chatbi.api.schemas import QueryRequest
-from chatbi.config import APP_CONFIG
-from chatbi.security import UserContext
+from chatbi.core.config import APP_CONFIG
+from chatbi.core.security import UserContext
 from chatbi.services.chatbi_service import ChatBISystem
 
 system = ChatBISystem(app_config=APP_CONFIG)

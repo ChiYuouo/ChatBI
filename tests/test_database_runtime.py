@@ -1,12 +1,12 @@
 import pymysql
 import pytest
 
-from chatbi.database import (
+from chatbi.infrastructure.database import (
     DatabaseClient,
     DatabaseConnectionPool,
     QueryExecutionError,
 )
-from chatbi.security import UserContext
+from chatbi.core.security import UserContext
 
 
 class ExplainableCursor:

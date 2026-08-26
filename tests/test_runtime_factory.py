@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 def test_build_runtime_uses_requested_database_source(monkeypatch):
-    import chatbi.runtime_factory as runtime_factory
+    import chatbi.bootstrap.runtime_factory as runtime_factory
 
     captured = {}
 
@@ -46,7 +46,7 @@ def test_build_runtime_uses_requested_database_source(monkeypatch):
 
 
 def test_chatbi_system_run_uses_runtime_factory_for_source_id():
-    from chatbi.security import UserContext
+    from chatbi.core.security import UserContext
     from chatbi.services.chatbi_service import ChatBISystem
 
     captured = {}

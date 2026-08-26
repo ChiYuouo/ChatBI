@@ -18,9 +18,9 @@ from typing import Any, Callable, Literal
 import pymysql
 from pydantic import BaseModel, Field
 
-from chatbi.config import DB_CONFIG
-from chatbi.query_decomposer import DecompositionPlan, DecomposedTask, QueryDecomposer
-from chatbi.report_generator import ReportGenerator
+from chatbi.analysis.query_decomposer import DecompositionPlan, DecomposedTask, QueryDecomposer
+from chatbi.analysis.report_generator import ReportGenerator
+from chatbi.core.config import DB_CONFIG
 from chatbi.services.chatbi_service import ChatBISystem
 
 

@@ -20,12 +20,12 @@ from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any, Generator
 
-from chatbi.config import APP_CONFIG, LLM_CONFIG
-from chatbi.database import QueryExecutionError
-from chatbi.indicator_knowledge import IndicatorKnowledge
-from chatbi.prompt_builder import build_prompt
-from chatbi.runtime_factory import build_runtime
-from chatbi.security import SecurityError, UserContext
+from chatbi.bootstrap.runtime_factory import build_runtime
+from chatbi.core.config import APP_CONFIG, LLM_CONFIG
+from chatbi.core.security import SecurityError, UserContext
+from chatbi.infrastructure.database import QueryExecutionError
+from chatbi.retrieval.indicator_knowledge import IndicatorKnowledge
+from chatbi.text2sql.prompt_builder import build_prompt
 
 
 @dataclass(slots=True)
@@ -89,7 +89,7 @@ class ChatBISystem:
 
         if use_indicator_rag:
             try:
-                from chatbi.indicator_retriever import retrieve_indicator_context
+                from chatbi.retrieval.indicator_retriever import retrieve_indicator_context
 
                 context = retrieve_indicator_context(user_question)
                 detected_indicators = context["detected_indicators"]

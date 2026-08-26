@@ -11,8 +11,8 @@ from typing import Callable
 
 from pydantic import BaseModel, Field, ValidationError
 
-from chatbi.llm_client import LLMClient
-from chatbi.prompt_builder import SCHEMA
+from chatbi.infrastructure.llm_client import LLMClient
+from chatbi.text2sql.prompt_builder import SCHEMA
 
 
 class DecomposedTask(BaseModel):
@@ -53,7 +53,7 @@ AVAILABLE_DIMENSIONS = [
 
 
 def _load_indicator_catalog() -> list[str]:
-    config_path = Path(__file__).resolve().parents[2] / "indicators_full.json"
+    config_path = Path(__file__).resolve().parents[3] / "indicators_full.json"
     with config_path.open("r", encoding="utf-8") as file:
         data = json.load(file)
 
