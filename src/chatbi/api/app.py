@@ -1,17 +1,16 @@
 """FastAPI 应用创建与全局中间件配置。"""
 
 import logging
-from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
 
 from chatbi.api.dependencies import attach_user_context
 from chatbi.api.routes import router
 from chatbi.api.schemas import ErrorResponse
+from chatbi.core.config import APP_CONFIG
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,7 +49,7 @@ def create_app() -> FastAPI:
 
     application.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=APP_CONFIG["http"]["cors_allowed_origins"],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -98,10 +97,6 @@ def create_app() -> FastAPI:
         )
 
     application.include_router(router)
-
-    static_dir = Path(__file__).resolve().parents[3] / "static"
-    if static_dir.is_dir():
-        application.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
     return application
 

@@ -14,6 +14,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def parse_comma_separated(value: str) -> list[str]:
+    """把逗号分隔的环境变量解析为非空字符串列表。"""
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 def _build_default_db_source() -> dict[str, object]:
     return {
         "driver": os.getenv("DB_DRIVER", "mysql"),
@@ -32,6 +37,14 @@ def _build_default_db_source() -> dict[str, object]:
 
 APP_CONFIG = {
     "environment": os.getenv("APP_ENV", "dev"),
+    "http": {
+        "cors_allowed_origins": parse_comma_separated(
+            os.getenv(
+                "CORS_ALLOWED_ORIGINS",
+                "http://localhost:5173,http://127.0.0.1:5173",
+            )
+        ),
+    },
     "database": {
         "default_source": os.getenv("DB_DEFAULT_SOURCE", "mysql_main"),
         "sources": {

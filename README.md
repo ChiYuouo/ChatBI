@@ -10,7 +10,7 @@
 - Schema Linking 与指标 RAG，按问题动态召回相关表、字段和指标定义
 - Few-shot 示例、业务规则和多表 Join 辅助，提高 SQL 生成准确率
 - 只读 SQL 校验、角色权限、行级过滤与敏感字段脱敏
-- 内置简洁 Web 页面，可直接查看生成的 SQL 和查询结果
+- 独立 Web 前端，可直接查看生成的 SQL 和查询结果
 
 ## 工作流程
 
@@ -29,6 +29,7 @@ flowchart LR
 ## 目录结构
 
 ```text
+frontend/           # 独立运行的原生 Web 前端
 src/chatbi/
 ├── analysis/        # 复杂问题拆解、执行计划与分析报告
 ├── api/             # FastAPI 应用、路由、依赖和数据模型
@@ -53,15 +54,21 @@ uv sync
 # 2. 配置环境变量
 cp .env.example .env
 
-# 3. 启动服务
+# 3. 启动后端服务
 uv run uvicorn api_service:app --reload
+
+# 4. 新开一个终端，启动前端服务
+uv run python -m http.server 5173 --directory frontend
 ```
 
 启动后访问：
 
-- Web 页面：<http://localhost:8000/static/index.html>
+- Web 页面：<http://localhost:5173>
 - API 文档：<http://localhost:8000/docs>
 - 健康检查：<http://localhost:8000/health>
+
+前端默认请求 `http://localhost:8000`，可在 `frontend/config.js` 中修改后端地址。
+后端通过 `CORS_ALLOWED_ORIGINS` 环境变量配置允许访问 API 的前端地址。
 
 也可以直接使用命令行：
 
