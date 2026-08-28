@@ -1,0 +1,296 @@
+/* 全局基础设置 */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: #f4f6fa;
+  color: #262626;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+.chatbi-app-layout {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 顶部 Header */
+.chatbi-header {
+  background: #ffffff;
+  border-bottom: 1px solid #e8ecf2;
+  padding: 12px 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.03);
+}
+
+.header-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand-logo {
+  width: 40px;
+  height: 40px;
+  background: #e6f4ff;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 主体容器 */
+.chatbi-main-container {
+  width: 100%;
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 24px 16px 64px;
+  flex: 1;
+}
+
+/* 输入区域 */
+.query-input-section {
+  background: #ffffff;
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04);
+  border: 1px solid #e8ecf2;
+  margin-bottom: 24px;
+}
+
+.prompt-suggestions-wrapper {
+  margin-top: 8px;
+  padding-top: 12px;
+  border-top: 1px dashed #f0f0f0;
+}
+
+.prompt-header {
+  margin-bottom: 8px;
+}
+
+/* 查询卡片 */
+.query-card-item {
+  border: 1px solid #e8ecf2;
+  transition: all 0.2s ease;
+}
+
+.query-card-item:hover {
+  border-color: #d0d7e2;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.06) !important;
+}
+
+.query-question-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #f5f5f5;
+}
+
+.question-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+}
+
+.q-badge {
+  width: 26px;
+  height: 26px;
+  background: #1677ff;
+  color: #ffffff;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.question-actions {
+  display: flex;
+  align-items: center;
+}
+
+/* SQL 展示区 */
+.sql-viewer-card {
+  background: #181825;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #313244;
+}
+
+.sql-viewer-header {
+  background: #11111b;
+  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #313244;
+}
+
+.sql-header-title {
+  color: #cdd6f4;
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+}
+
+.sql-header-actions {
+  display: flex;
+  align-items: center;
+}
+
+.sql-action-btn {
+  color: #a6adc8 !important;
+  font-size: 12px !important;
+}
+
+.sql-action-btn:hover {
+  color: #ffffff !important;
+  background: rgba(255, 255, 255, 0.1) !important;
+}
+
+.sql-code-container {
+  padding: 16px;
+  max-height: 380px;
+  overflow: auto;
+}
+
+.sql-code-content {
+  margin: 0;
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", "Consolas", monospace;
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: #cdd6f4;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* SQL 关键字高亮样式 */
+.sql-token-keyword {
+  color: #cba6f7;
+  font-weight: 600;
+}
+
+.sql-token-function {
+  color: #89b4fa;
+  font-weight: 600;
+}
+
+.sql-token-string {
+  color: #a6e3a1;
+}
+
+.sql-token-number {
+  color: #fab387;
+}
+
+.sql-token-comment {
+  color: #6c7086;
+  font-style: italic;
+}
+
+.sql-streaming-cursor {
+  display: inline-block;
+  width: 7px;
+  height: 16px;
+  background: #89b4fa;
+  animation: sql-blink 0.8s infinite;
+  vertical-align: text-bottom;
+  margin-left: 2px;
+}
+
+@keyframes sql-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+/* 结果表格展示区 */
+.result-view-container {
+  background: #ffffff;
+  border-radius: 8px;
+  padding: 14px 0 0;
+}
+
+.result-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  padding: 0 4px;
+}
+
+.result-title-group {
+  display: flex;
+  align-items: center;
+}
+
+.result-table-wrapper {
+  overflow-x: auto;
+  border-radius: 6px;
+}
+
+.result-empty-box {
+  padding: 32px 0;
+  background: #fafafa;
+  border-radius: 8px;
+  border: 1px dashed #d9d9d9;
+}
+
+.result-formatted-wrapper {
+  background: #fafbfc;
+  border: 1px solid #e8e8e8;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.result-formatted-text {
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  margin: 0;
+  color: #333;
+}
+
+/* 状态流 ThoughtChain 容器 */
+.status-chain-wrapper {
+  background: #fbfcfe;
+  border: 1px solid #eef2f7;
+  border-radius: 8px;
+  padding: 12px 16px;
+}
+
+/* 空状态欢迎界面 */
+.empty-state-container {
+  background: #ffffff;
+  border-radius: 12px;
+  padding: 40px 24px;
+  text-align: center;
+  border: 1px solid #e8ecf2;
+}
+
+.feature-intro-card {
+  background: #fafbfc;
+  border: 1px solid #f0f2f5;
+  border-radius: 8px;
+  padding: 12px;
+  text-align: center;
+}
+
+.feature-icon {
+  margin-bottom: 4px;
+}
