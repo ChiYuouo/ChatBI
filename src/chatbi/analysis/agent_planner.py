@@ -1,7 +1,7 @@
 """
 Plan-and-Execute Agent 骨架模块
 
-承接第 22 课的 Query 拆解结果，补齐 Planner、Executor、Summarizer 三个角色，
+承接 Query 拆解结果，补齐 Planner、Executor、Summarizer 三个角色，
 形成“复杂问题 -> 子任务 -> 执行计划 -> 多步执行 -> 结果汇总”的最小闭环。
 """
 

@@ -1,13 +1,13 @@
 """
 多表 Join 路径自动推理模块
 
-第 17 课：在表召回和字段匹配之后，自动推导多表之间的 Join 路径和 Join 条件。
+在表召回和字段匹配之后，自动推导多表之间的 Join 路径和 Join 条件。
 
 本模块包含两个独立职责：
 1. 锚表选择（select_anchor）：基于用户问题的意图，判断哪张表应该作为 SQL 的 FROM 子句主表。
 2. Join 路径推导（resolve_joins）：已知锚表后，使用 BFS 图算法找到连接所有目标表的最短路径。
 
-本课不使用 Embedding，是纯图算法 + 轻量意图识别。
+本模块不使用 Embedding，是纯图算法 + 轻量意图识别。
 """
 
 from collections import deque

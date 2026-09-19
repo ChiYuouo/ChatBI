@@ -1,8 +1,8 @@
 """
 Prompt 构造模块
 负责将 Schema 信息、Few-shot 示例和用户问题组装为完整 Prompt。
-Schema 和示例在此集中维护，便于后续课程中动态扩展。
-第 7 课增强：新增 RULES（业务规则注入层）与 ERROR_GUARDS（错误防护层），
+Schema 和示例在此集中维护，便于后续动态扩展。
+RULES（业务规则注入层）与 ERROR_GUARDS（错误防护层）在此定义，
 通过 build_prompt 的可选参数控制是否注入，实现 Prompt 策略的灵活切换。
 """
 from chatbi.retrieval.indicator_knowledge import IndicatorKnowledge
@@ -109,7 +109,7 @@ ORDER BY month;
 """
 
 
-# ==================== 规则注入层（第 7 课新增）====================
+# ==================== 规则注入层 ====================
 
 RULES = """
 【关键业务规则】
@@ -131,7 +131,7 @@ RULES = """
 """
 
 
-# ==================== 错误防护层（第 7 课新增）====================
+# ==================== 错误防护层 ====================
 
 ERROR_GUARDS = """
 【常见错误防护】
@@ -169,10 +169,10 @@ def build_prompt(
     Args:
         user_question: 用户的自然语言问题
         use_few_shot: 是否使用 Few-shot 示例
-        use_rules: 是否注入业务规则层（第 7 课新增）
-        use_guards: 是否注入错误防护层（第 7 课新增）
+        use_rules: 是否注入业务规则层
+        use_guards: 是否注入错误防护层
         indicator_knowledge: 指标知识文本块
-        use_schema_linking: 是否使用动态 Schema Linking（第18课新增）
+        use_schema_linking: 是否使用动态 Schema Linking
                            为 True 时调用 schema_linker 动态生成精简 Schema，
                            失败时自动回退到全量 Schema。
     Returns:
@@ -185,7 +185,7 @@ def build_prompt(
     if use_rules or use_guards:
         system_msg = "你是一个专业的 SQL 生成助手，擅长根据业务问题生成标准 MySQL 查询语句。请严格遵守给定的业务规则，避免常见错误。"
 
-    # 第18课新增：动态 Schema Linking（失败时自动回退全量 Schema）
+    # 动态 Schema Linking（失败时自动回退全量 Schema）
     schema_text = SCHEMA
     if use_schema_linking:
         try:

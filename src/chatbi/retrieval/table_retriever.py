@@ -1,7 +1,6 @@
 """
 表级召回模块（LangChain + ChromaDB）
 
-第 15 课：将手写向量检索升级为工程化方案。
 使用 LangChain 统一抽象层 + ChromaDB 持久化向量数据库，
 实现表级召回的可持久化、可扩展版本。
 
@@ -115,7 +114,7 @@ def _cosine_relevance_score_fn(distance: float) -> float:
 
     ChromaDB 在 hnsw:space=cosine 模式下，distance = 1 - cosine_similarity。
     因此 cosine_similarity = 1 - distance，值域 [-1, 1]，
-    与第 14 课手写余弦相似度一致，方便对比。
+    与手写实现的余弦相似度一致，方便对比。
     """
     return 1 - distance
 
@@ -137,7 +136,7 @@ def get_vectorstore() -> Chroma:
 
     关键配置：
     - collection_metadata={"hnsw:space": "cosine"}：使用 cosine 距离而非默认的 L2 距离
-    - relevance_score_fn：将 cosine 距离转换回余弦相似度（与第 14 课一致）
+    - relevance_score_fn：将 cosine 距离转换回余弦相似度（与手写实现一致）
 
     如果不指定 cosine 空间，ChromaDB 默认使用 L2 距离，
     LangChain 的默认分数转换 (1 - distance/2) 在 L2 距离超过 2 时会产生负值。

@@ -1,7 +1,7 @@
 """
 Schema Linking Pipeline 编排模块
 
-第 18 课：将表召回（table_retriever）、字段匹配（field_matcher）、
+将表召回（table_retriever）、字段匹配（field_matcher）、
 Join 推理（join_resolver）三个模块串联为完整 Pipeline。
 
 输入：用户的自然语言问题
@@ -23,7 +23,7 @@ from chatbi.retrieval.join_resolver import (
 
 # ==================== Schema Linking Pipeline ====================
 def _score_table_by_keywords(query: str, table_name: str) -> int:
-    """基于17课 TABLE_KEYWORDS，计算查询与某张表的关键词匹配分数。"""
+    """基于 TABLE_KEYWORDS，计算查询与某张表的关键词匹配分数。"""
     keywords = TABLE_KEYWORDS.get(table_name, [])
     return sum(1 for kw in keywords if kw in query)
 
@@ -34,7 +34,7 @@ def _ensure_fact_table_for_metric(query: str, tables: list[dict]) -> list[dict]:
 
     背景：table_retriever 基于 Embedding 相似度召回，可能把"毛利率"这种问题
     错误地关联到 finance_expenses（费用表），而 sales_orders（订单事实表）
-    才是计算毛利的正确来源。因此需要结合17课的关键词规则做二次校验。
+    才是计算毛利的正确来源。因此需要结合 TABLE_KEYWORDS 的关键词规则做二次校验。
 
     逻辑：
     1. 无强指标词时跳过；

@@ -1,13 +1,13 @@
 """
 字段语义匹配模块
 
-第 16 课：在表召回基础上，实现字段级的语义匹配。
-使用 LangChain + ChromaDB（复用第 15 课基础设施），
+在表召回基础上，实现字段级的语义匹配。
+使用 LangChain + ChromaDB（复用表召回的基础设施），
 为候选表的所有字段构建向量索引，结合业务规则实现混合匹配。
 
 解决经典歧义：gross_amount vs net_amount、region vs country 等。
 
-依赖安装：同第 15 课（langchain-openai, langchain-chroma, chromadb）
+依赖安装：langchain-openai, langchain-chroma, chromadb
 """
 
 from pathlib import Path
@@ -496,7 +496,7 @@ def _cosine_relevance_score_fn(distance: float) -> float:
 
 
 def get_embeddings() -> OpenAIEmbeddings:
-    """构建 LangChain OpenAI Embeddings 实例（复用第 15 课配置）"""
+    """构建 LangChain OpenAI Embeddings 实例（使用项目统一配置）"""
     return OpenAIEmbeddings(
         model=LLM_CONFIG["embedding_model"],
         base_url=LLM_CONFIG["base_url"],
