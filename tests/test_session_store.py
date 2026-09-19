@@ -15,6 +15,7 @@ from chatbi.api.schemas import QueryRequest
 from chatbi.infrastructure.session_store import SessionStore
 from chatbi.services.chatbi_service import ChatBISystem
 from chatbi.text2sql.prompt_builder import build_prompt
+from chatbi.text2sql.query_rewriter import QueryRewriter
 
 FAKE_SQL = "SELECT region, SUM(net_amount) FROM sales_orders GROUP BY region;"
 
@@ -77,11 +78,15 @@ def build_runtime(llm=None):
     )
 
 
-def build_system(llm=None, with_store: bool = True):
+def build_system(llm=None, with_store: bool = True, query_rewriter=None):
     """构造 ChatBISystem；会话库落在临时目录，不污染工作区。"""
     runtime = build_runtime(llm)
     store = SessionStore(os.path.join(tempfile.mkdtemp(), "sessions.db")) if with_store else None
-    system = ChatBISystem(runtime=runtime, session_store=store)
+    system = ChatBISystem(
+        runtime=runtime,
+        session_store=store,
+        query_rewriter=query_rewriter,
+    )
     return system, runtime.llm, store
 
 
@@ -148,6 +153,100 @@ def test_render_history_omits_sql_line_when_absent():
 
     assert "没有 SQL 的问题" in rendered
     assert "生成SQL" not in rendered
+
+
+# ==================== 清理机制 ====================
+
+
+def test_store_caps_turns_per_session():
+    store = SessionStore(
+        os.path.join(tempfile.mkdtemp(), "sessions.db"),
+        max_turns_per_session=3,
+    )
+    for index in range(1, 6):
+        store.append_turn("s1", "u1", f"问题{index}", f"SELECT {index}")
+
+    # 超出上限后只留最近的，不会无限堆积
+    questions = [turn.question for turn in store.recent_turns("s1", "u1")]
+    assert questions == ["问题3", "问题4", "问题5"]
+
+
+def test_store_prunes_expired_records_on_init():
+    db_path = os.path.join(tempfile.mkdtemp(), "sessions.db")
+    writer = SessionStore(db_path)
+    writer.append_turn("s1", "u1", "老问题", FAKE_SQL)
+
+    # retention_days=-1 表示保留期已过，初始化时应把旧记录清掉
+    SessionStore(db_path, retention_days=-1)
+
+    assert writer.recent_turns("s1", "u1") == []
+
+
+def test_store_reads_limits_from_env(monkeypatch):
+    monkeypatch.setenv("SESSION_MAX_TURNS", "7")
+    monkeypatch.setenv("SESSION_RETENTION_DAYS", "5")
+
+    store = SessionStore(os.path.join(tempfile.mkdtemp(), "sessions.db"))
+
+    assert store.max_turns_per_session == 7
+    assert store.retention_days == 5
+
+
+def test_store_falls_back_on_invalid_env(monkeypatch):
+    monkeypatch.setenv("SESSION_MAX_TURNS", "not-a-number")
+
+    store = SessionStore(os.path.join(tempfile.mkdtemp(), "sessions.db"))
+
+    assert store.max_turns_per_session == 100
+
+
+# ==================== 删除会话 ====================
+
+
+def test_store_deletes_session_records():
+    store = SessionStore(os.path.join(tempfile.mkdtemp(), "sessions.db"))
+    store.append_turn("s1", "u1", "问题1", FAKE_SQL)
+    store.append_turn("s1", "u1", "问题2", FAKE_SQL)
+    store.append_turn("s2", "u1", "别的会话", FAKE_SQL)
+
+    deleted = store.delete_session("s1", "u1")
+
+    assert deleted == 2
+    assert store.recent_turns("s1", "u1") == []
+    # 其它会话不受影响
+    assert len(store.recent_turns("s2", "u1")) == 1
+
+
+def test_store_delete_does_not_touch_other_user():
+    store = SessionStore(os.path.join(tempfile.mkdtemp(), "sessions.db"))
+    store.append_turn("s1", "u1", "u1 的问题", FAKE_SQL)
+    store.append_turn("s1", "u2", "u2 的问题", FAKE_SQL)
+
+    store.delete_session("s1", "u1")
+
+    # 同 session_id 下另一个用户的记录不能被误删
+    assert len(store.recent_turns("s1", "u2")) == 1
+
+
+def test_store_delete_without_session_id_is_noop():
+    store = SessionStore(os.path.join(tempfile.mkdtemp(), "sessions.db"))
+    store.append_turn("s1", "u1", "问题", FAKE_SQL)
+
+    assert store.delete_session(None, "u1") == 0
+    assert len(store.recent_turns("s1", "u1")) == 1
+
+
+def test_new_session_stops_using_previous_history():
+    """「新会话」的效果：旧上下文不再参与后续查询。"""
+    system, llm, store = build_system()
+
+    system.run(user_question="各区域的订单量是多少", session_id="s1", **HERMETIC_OPTIONS)
+    # 模拟前端点「新会话」：删服务端历史 + 换新 session_id
+    store.delete_session("s1", "demo_admin")
+    system.run(user_question="那2月呢？", session_id="s2", **HERMETIC_OPTIONS)
+
+    assert "【对话历史】" not in llm.prompts[1]
+    assert store.recent_turns("s1", "demo_admin") == []
 
 
 # ==================== Prompt 层 ====================
@@ -226,6 +325,73 @@ def test_without_session_id_does_not_initialise_store():
     system.run(user_question="各区域收入是多少", **HERMETIC_OPTIONS)
 
     assert system._session_store is None
+
+
+# ==================== 提问改写与会话的联动 ====================
+
+
+def test_follow_up_is_rewritten_before_generating_sql():
+    """有历史时，改写后的问题会进入 Prompt。"""
+    rewriter = QueryRewriter(lambda system_msg, prompt: "2026年2月各区域的订单量")
+    system, llm, _ = build_system(query_rewriter=rewriter)
+
+    system.run(user_question="各区域订单量是多少", session_id="s1", **HERMETIC_OPTIONS)
+    system.run(user_question="那2月呢？", session_id="s1", **HERMETIC_OPTIONS)
+
+    assert "2026年2月各区域的订单量" in llm.prompts[1]
+
+
+def test_rewrite_can_be_disabled_per_request():
+    rewriter = QueryRewriter(lambda system_msg, prompt: "2026年2月各区域的订单量")
+    system, llm, _ = build_system(query_rewriter=rewriter)
+
+    system.run(user_question="各区域订单量是多少", session_id="s1", **HERMETIC_OPTIONS)
+    system.run(
+        user_question="那2月呢？",
+        session_id="s1",
+        use_query_rewrite=False,
+        **HERMETIC_OPTIONS,
+    )
+
+    assert "2026年2月各区域的订单量" not in llm.prompts[1]
+
+
+def test_rewrite_is_skipped_without_history():
+    """单轮查询不该触发改写 —— 没有指代可消解，纯属浪费一次模型调用。"""
+    calls = {"count": 0}
+
+    def generator(system_msg, prompt):
+        calls["count"] += 1
+        return "改写结果"
+
+    system, _, _ = build_system(query_rewriter=QueryRewriter(generator))
+    system.run(user_question="各区域订单量是多少", **HERMETIC_OPTIONS)
+
+    assert calls["count"] == 0
+
+
+def test_streaming_emits_rewrite_done_event():
+    rewriter = QueryRewriter(lambda system_msg, prompt: "2026年2月各区域的订单量")
+    system, _, _ = build_system(query_rewriter=rewriter)
+
+    list(system.run_stream_events("各区域订单量是多少", session_id="s1", **HERMETIC_OPTIONS))
+    events = list(system.run_stream_events("那2月呢？", session_id="s1", **HERMETIC_OPTIONS))
+    rewrite_events = [data for name, data in events if name == "rewrite_done"]
+
+    assert len(rewrite_events) == 1
+    assert rewrite_events[0]["original_question"] == "那2月呢？"
+    assert rewrite_events[0]["rewritten_question"] == "2026年2月各区域的订单量"
+
+
+def test_no_rewrite_event_when_question_unchanged():
+    """改写结果与原问题相同时不该发事件，避免界面出现无意义的提示。"""
+    rewriter = QueryRewriter(lambda system_msg, prompt: "那2月呢？")
+    system, _, _ = build_system(query_rewriter=rewriter)
+
+    list(system.run_stream_events("各区域订单量是多少", session_id="s1", **HERMETIC_OPTIONS))
+    events = list(system.run_stream_events("那2月呢？", session_id="s1", **HERMETIC_OPTIONS))
+
+    assert [name for name, _ in events if name == "rewrite_done"] == []
 
 
 # ==================== 请求模型 ====================

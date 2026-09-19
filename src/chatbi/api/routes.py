@@ -24,6 +24,7 @@ from chatbi.api.schemas import (
     QuerySuccessResponse,
 )
 from chatbi.core.config import APP_CONFIG
+from chatbi.core.security import UserContext
 
 logger = logging.getLogger("chatbi.api")
 router = APIRouter()
@@ -137,6 +138,29 @@ async def query_chatbi_stream(payload: QueryRequest, request: Request) -> Stream
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.delete(
+    "/api/v1/session/{session_id}",
+    tags=["查询"],
+    summary="清空指定会话的历史上下文",
+)
+def clear_session(session_id: str, request: Request) -> dict:
+    """删除该会话在当前用户下的全部历史记录。
+
+    前端「新会话」时必须调用：只切换 session_id 而不删数据，
+    旧查询记录（含 SQL）会一直留在磁盘上直到过期清理，
+    用户以为清了其实还在。
+    """
+    user_context = getattr(request.state, "user_context", UserContext.demo_admin())
+    deleted = system.session_store.delete_session(session_id, user_context.user_id)
+    logger.info(
+        "会话历史清除: session=%s user=%s deleted=%s",
+        session_id,
+        user_context.user_id,
+        deleted,
+    )
+    return {"session_id": session_id, "deleted": deleted}
 
 
 @router.post(
