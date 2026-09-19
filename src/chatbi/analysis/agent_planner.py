@@ -847,58 +847,6 @@ class StepExecutor:
     ) -> bool:
         return any(not results_by_step[step_id].success for step_id in dependency_ids)
 
-    def _pick_result_brief(self, result: StepExecutionResult) -> str:
-        if not result.success:
-            return f"执行失败，错误信息：{result.error or '未知错误'}"
-
-        if result.formatted.strip() and not self._looks_like_table(result.formatted):
-            meaningful_line = self._pick_meaningful_formatted_line(result.formatted)
-            if meaningful_line:
-                return meaningful_line
-
-        if result.rows:
-            return self._summarize_rows(result.rows)
-
-        if result.formatted.strip():
-            meaningful_line = self._pick_meaningful_formatted_line(result.formatted)
-            if meaningful_line:
-                return meaningful_line
-
-        stored_rows = self.get_intermediate_result(result.result_reference)
-        if stored_rows:
-            return json.dumps(stored_rows[0], ensure_ascii=False)
-
-        if result.rows:
-            return json.dumps(result.rows[0], ensure_ascii=False)
-
-        return "步骤执行成功，但当前无返回行。"
-
-    @staticmethod
-    def _summarize_rows(rows: list[dict[str, Any]]) -> str:
-        first_row = rows[0]
-        parts = [
-            f"{key}={value}"
-            for key, value in first_row.items()
-            if value is not None
-        ]
-        return "，".join(parts[:4])[:120]
-
-    @staticmethod
-    def _pick_meaningful_formatted_line(formatted: str) -> str:
-        for line in formatted.strip().splitlines():
-            stripped = line.strip()
-            if not stripped:
-                continue
-            if set(stripped) <= {"-", "+"}:
-                continue
-            return stripped[:120]
-        return ""
-
-    @staticmethod
-    def _looks_like_table(formatted: str) -> bool:
-        text = formatted.strip()
-        return "+" in text and "|" in text
-
     @staticmethod
     def _normalize_result(
         step: PlanStep,
