@@ -78,6 +78,7 @@ def query_chatbi(payload: QueryRequest, request: Request) -> QuerySuccessRespons
         user_question=payload.question,
         source_id=payload.source_id,
         security_context=user_context,
+        session_id=payload.session_id,
         **query_options,
     )
 
@@ -123,6 +124,7 @@ async def query_chatbi_stream(payload: QueryRequest, request: Request) -> Stream
             user_question=payload.question,
             source_id=payload.source_id,
             security_context=user_context,
+            session_id=payload.session_id,
             **query_options,
         )
 

@@ -162,6 +162,7 @@ def build_prompt(
     use_guards: bool = False,
     indicator_knowledge:  str = "",
     use_schema_linking: bool = False,
+    history: str = "",
 ) -> tuple[str, str]:
     """
     构造发送给 LLM 的 Prompt
@@ -175,6 +176,8 @@ def build_prompt(
         use_schema_linking: 是否使用动态 Schema Linking
                            为 True 时调用 schema_linker 动态生成精简 Schema，
                            失败时自动回退到全量 Schema。
+        history: 已渲染好的对话历史文本块；为空表示无历史（单轮查询）。
+                 只含历史问题与 SQL，不含结果数据。
     Returns:
         (system_message, user_message)
         :param use_indicators:
@@ -220,6 +223,15 @@ def build_prompt(
         prompt += f"""
     {indicator_knowledge}
     """
+
+    if history:
+        prompt += f"""
+【对话历史】
+{history}
+
+以上是本会话此前的问答记录。若当前问题包含「那」「这个」「刚才」等指代，
+请先结合历史理解其真实含义，再生成 SQL。
+"""
 
     prompt += f"""
 【用户问题】

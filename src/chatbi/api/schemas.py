@@ -9,6 +9,14 @@ class QueryRequest(BaseModel):
     """查询请求体。"""
 
     question: str = Field(..., min_length=1, description="业务人员的自然语言问题")
+    session_id: str | None = Field(
+        default=None,
+        max_length=128,
+        description=(
+            "会话标识；多次查询传同一值即可共享上下文，支持「那2月呢」这类追问。"
+            "不传则本次查询无历史，行为与之前完全一致"
+        ),
+    )
     use_few_shot: bool | None = Field(default=None, description="是否启用 Few-shot 示例")
     use_rules: bool | None = Field(default=None, description="是否启用业务规则约束")
     use_guards: bool | None = Field(default=None, description="是否启用错误防护")

@@ -29,6 +29,7 @@ from chatbi.bootstrap.runtime_factory import build_runtime
 from chatbi.core.config import APP_CONFIG, LLM_CONFIG
 from chatbi.core.security import SecurityError, UserContext
 from chatbi.infrastructure.database import QueryExecutionError
+from chatbi.infrastructure.session_store import SessionStore
 from chatbi.retrieval.indicator_knowledge import IndicatorKnowledge
 from chatbi.text2sql.prompt_builder import build_prompt
 
@@ -51,6 +52,7 @@ class ChatBISystem:
         runtime=None,
         app_config: dict | None = None,
         runtime_factory=build_runtime,
+        session_store: SessionStore | None = None,
     ):
         self.app_config = app_config or APP_CONFIG
         self.runtime_factory = runtime_factory
@@ -60,6 +62,18 @@ class ChatBISystem:
         self.db = self.runtime.db
         self.formatter = self.runtime.formatter
         self.indicator_knowledge = self.runtime.indicator_knowledge
+        self._session_store = session_store
+
+    @property
+    def session_store(self) -> SessionStore:
+        """懒创建会话存储。
+
+        仅 import 本模块不应在工作区落下 SQLite 文件，
+        因此在真正需要多轮上下文时才初始化。
+        """
+        if self._session_store is None:
+            self._session_store = SessionStore()
+        return self._session_store
 
     def rebind_runtime(self, runtime) -> None:
         """切换到外部已构建的运行时，避免同一次请求重复创建连接池。
@@ -139,6 +153,7 @@ class ChatBISystem:
         use_indicator_rag: bool | None,
         source_id: str | None,
         security_context: UserContext | None,
+        session_id: str | None = None,
     ) -> _PreparedQuery | None:
         """完成同步与流式查询共用的解析、知识检索和 Prompt 构造。"""
         runtime = self._get_runtime(source_id)
@@ -164,6 +179,15 @@ class ChatBISystem:
             use_indicator_rag=options["use_indicator_rag"],
             indicator_knowledge=runtime.indicator_knowledge,
         )
+        # 多轮上下文：只有传了 session_id 才读历史。
+        # 未传时不触碰会话存储，行为与单轮查询完全一致。
+        history = ""
+        if session_id:
+            history = self.session_store.render_history(
+                session_id,
+                user_context.user_id,
+            )
+
         system_msg, prompt = build_prompt(
             user_question,
             use_few_shot=options["use_few_shot"],
@@ -171,6 +195,7 @@ class ChatBISystem:
             use_guards=options["use_guards"],
             indicator_knowledge=indicator_block,
             use_schema_linking=options["use_schema_linking"],
+            history=history,
         )
         return _PreparedQuery(
             runtime=runtime,
@@ -192,6 +217,7 @@ class ChatBISystem:
         use_indicator_rag: bool | None = None,
         source_id: str | None = None,
         security_context: UserContext | None = None,
+        session_id: str | None = None,
     ) -> dict:
         """
         运行完整链路
@@ -219,6 +245,7 @@ class ChatBISystem:
             use_indicator_rag=use_indicator_rag,
             source_id=source_id,
             security_context=security_context,
+            session_id=session_id,
         )
         if prepared is None:
             return {
@@ -267,6 +294,15 @@ class ChatBISystem:
             columns, results = runtime.db.execute(sql, user=user_context)
             db_info = getattr(runtime.db, "last_query_info", {})
             formatted = runtime.formatter.format(columns, results)
+            # 只在成功时记录本轮问答。失败的 SQL 不进历史，
+            # 免得后续轮次被上一条错 SQL 带偏。
+            if session_id:
+                self.session_store.append_turn(
+                    session_id=session_id,
+                    user_id=user_context.user_id,
+                    question=user_question,
+                    sql=sql,
+                )
             return {
                 "success": True,
                 "sql": sql,
@@ -366,6 +402,7 @@ class ChatBISystem:
         use_indicator_rag: bool | None = None,
         source_id: str | None = None,
         security_context: UserContext | None = None,
+        session_id: str | None = None,
     ) -> Generator[str, None, None]:
         """
         流式运行完整链路，按阶段 yield SSE 事件字符串
@@ -402,6 +439,7 @@ class ChatBISystem:
             use_indicator_rag=use_indicator_rag,
             source_id=source_id,
             security_context=security_context,
+            session_id=session_id,
         ):
             yield _sse_event(event_type, data)
 
@@ -416,6 +454,7 @@ class ChatBISystem:
         use_indicator_rag: bool | None = None,
         source_id: str | None = None,
         security_context: UserContext | None = None,
+        session_id: str | None = None,
     ) -> Generator[tuple[str, dict], None, None]:
         """流式运行完整链路，产出 (事件类型, 事件数据) 二元组。
 
@@ -433,6 +472,7 @@ class ChatBISystem:
             use_indicator_rag=use_indicator_rag,
             source_id=source_id,
             security_context=security_context,
+            session_id=session_id,
         )
         if prepared is None:
             yield "error", {
@@ -490,6 +530,14 @@ class ChatBISystem:
             columns, results = runtime.db.execute(sql, user=user_context)
             db_info = getattr(runtime.db, "last_query_info", {})
             rows_dict = [dict(zip(columns, row)) for row in results]
+            # 只在成功时记录本轮问答，与 run 保持一致
+            if session_id:
+                self.session_store.append_turn(
+                    session_id=session_id,
+                    user_id=user_context.user_id,
+                    question=user_question,
+                    sql=sql,
+                )
             yield "result", {
                 "columns": columns,
                 "rows": rows_dict,
