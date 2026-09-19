@@ -35,14 +35,24 @@ def create_app() -> FastAPI:
 |------|------|------|
 | `/api/v1/query` | POST | 同步查询，一次性返回完整结果 |
 | `/api/v1/query/stream` | POST | SSE 流式查询，逐步推送 SQL 和结果 |
+| `/api/v1/analyze/stream` | POST | SSE 流式归因分析，多步执行 + 结论报告 |
 | `/health` | GET | 健康检查 |
 
 ### SSE 流式接口事件类型
 
 `/api/v1/query/stream` 返回 `sql_chunk`、`sql_done`、`result` 和 `error` 事件。
+
+`/api/v1/analyze/stream` 按归因阶段返回 `start`、`decomposition_start`、
+`decomposition_done`、`plan_ready`、`step_start`、`step_sql_chunk`、
+`step_sql_done`、`step_result`、`step_retry`、`step_done`、`summary_done`、
+`report_start`、`report_done`、`done` 和 `error` 事件。
+
+其中 SQL 执行失败时会把数据库报错回灌给模型重写，重写过程通过 `step_retry`
+事件（`mode=rewrite`）推送；瞬时故障的原样重试则标记为 `mode=retry`。
 """,
         openapi_tags=[
             {"name": "查询", "description": "自然语言转 SQL 查询接口"},
+            {"name": "分析", "description": "复杂问题的多步归因分析接口"},
             {"name": "系统", "description": "系统运维与监控接口"},
         ],
     )

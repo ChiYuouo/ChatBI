@@ -476,3 +476,137 @@ def test_step_executor_can_load_rows_from_temp_table_reference():
     assert results[0].result_reference == "temp_table://tmp_agent_step_1"
     assert loaded_rows == [{"month": "2026-05", "profit": 920000}]
     assert '"rows": [{"month": "2026-05", "profit": 920000}]' in captured_questions[1]
+
+
+# ==================== SQL 失败后按报错重写 ====================
+
+
+def test_step_executor_rewrites_sql_with_previous_error_on_syntax_failure():
+    """SQL 写错时，重试应带上上一次的 SQL 与报错，而不是原样重发。"""
+    plan = PlanGenerator().build_plan("最近三个月利润为什么下降？", sample_decomposition())
+    questions: list[str] = []
+
+    def runner(question: str) -> dict:
+        questions.append(question)
+        if len(questions) == 1:
+            return {
+                "success": False,
+                "sql": "SELECT month, SUM(a) - COALESCE(f.total, 0) FROM t GROUP BY month",
+                "error": (
+                    "SQL 执行失败：(1055, \"Expression #2 of SELECT list is not in "
+                    "GROUP BY clause and contains nonaggregated column 'f.total'\")"
+                ),
+                "error_type": "sql_syntax",
+            }
+        return {
+            "success": True,
+            "sql": "SELECT month, SUM(a) - COALESCE(MAX(f.total), 0) FROM t GROUP BY month",
+            "columns": ["month", "profit"],
+            "rows": [{"month": "2026-03", "profit": -554450}],
+            "formatted": "重写后执行成功",
+        }
+
+    executor = StepExecutor(step_runner=runner, max_retries=2)
+    results = executor.execute_plan(plan, max_steps=1)
+
+    assert len(questions) == 2
+    assert results[0].success is True
+    assert results[0].repaired is True
+
+    # 第二次提问必须携带上一次的 SQL 和数据库原始报错
+    repair_question = questions[1]
+    assert "COALESCE(f.total, 0)" in repair_question
+    assert "1055" in repair_question
+    assert "ONLY_FULL_GROUP_BY" in repair_question
+    # 原始问题本身仍要保留，避免重写时丢失分析意图
+    assert "查看最近三个月利润趋势" in repair_question.splitlines()[0]
+
+
+def test_step_executor_retries_without_rewrite_on_transient_failure():
+    """瞬时故障（如连接超时）应原样重试，而不是走 SQL 重写。"""
+    plan = PlanGenerator().build_plan("最近三个月利润为什么下降？", sample_decomposition())
+    questions: list[str] = []
+
+    def runner(question: str) -> dict:
+        questions.append(question)
+        if len(questions) == 1:
+            return {
+                "success": False,
+                "error": "数据库连接失败，请检查连接池和数据库状态",
+                "error_type": "connection_error",
+            }
+        return {
+            "success": True,
+            "sql": "SELECT 1",
+            "columns": ["value"],
+            "rows": [{"value": 1}],
+            "formatted": "重试成功",
+        }
+
+    executor = StepExecutor(step_runner=runner, max_retries=1)
+    results = executor.execute_plan(plan, max_steps=1)
+
+    assert len(questions) == 2
+    assert results[0].success is True
+    # 瞬时故障不该被塞入 SQL 修正上下文
+    assert questions[1] == questions[0]
+    assert "上一次尝试失败" not in questions[1]
+
+
+def test_step_executor_keeps_original_question_when_rewrite_also_fails():
+    """重写后仍失败时，要保留最后一次的错误信息，不能丢失失败原因。"""
+    plan = PlanGenerator().build_plan("最近三个月利润为什么下降？", sample_decomposition())
+
+    def runner(question: str) -> dict:
+        return {
+            "success": False,
+            "sql": "SELECT bad_sql",
+            "error": "SQL 执行失败：(1054, \"Unknown column 'bad_sql'\")",
+            "error_type": "sql_syntax",
+        }
+
+    executor = StepExecutor(step_runner=runner, max_retries=1)
+    results = executor.execute_plan(plan, max_steps=1)
+
+    assert results[0].success is False
+    assert results[0].status == "failed"
+    assert results[0].attempts == 2
+    assert results[0].error_type == "sql_syntax"
+    assert "1054" in (results[0].error or "")
+
+
+def test_step_executor_marks_repaired_step_and_emits_retry_event():
+    """流式路径下重写要推送 step_retry 事件，供前端提示用户。"""
+    plan = PlanGenerator().build_plan("最近三个月利润为什么下降？", sample_decomposition())
+    calls = {"n": 0}
+
+    def runner(question: str) -> dict:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {
+                "success": False,
+                "sql": "SELECT bad",
+                "error": "SQL 执行失败：(1055, only_full_group_by)",
+                "error_type": "sql_syntax",
+            }
+        return {
+            "success": True,
+            "sql": "SELECT good",
+            "columns": ["a"],
+            "rows": [{"a": 1}],
+            "formatted": "ok",
+        }
+
+    executor = StepExecutor(step_runner=runner, max_retries=1, failure_policy="skip")
+    events = list(executor.execute_plan_streaming(plan, max_steps=1))
+
+    retry_events = [data for name, data in events if name == "step_retry"]
+    assert len(retry_events) == 1
+    assert retry_events[0]["step_id"] == "step_1"
+    assert retry_events[0]["mode"] == "rewrite"
+    assert retry_events[0]["attempt"] == 2
+    assert "1055" in retry_events[0]["previous_error"]
+
+    done = [data for name, data in events if name == "step_done"][0]
+    assert done["repaired"] is True
+    assert done["error_type"] is None

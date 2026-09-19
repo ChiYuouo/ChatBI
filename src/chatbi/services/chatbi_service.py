@@ -11,6 +11,11 @@
 第20课增强：新增 use_schema_linking 和 use_indicator_rag 参数，
 支持 Schema Linking（动态 Schema 注入）+ 指标 RAG（语义检索指标知识）。
 两者可独立开关，均有 fallback 机制保障稳定性。
+
+第23课增强：新增 run_stream_events 结构化事件流方法，
+把原先只面向 SSE 字符串的流式链路拆出「事件字典」层，
+供 Agent 归因链路在子步骤中复用并附带 step_id、step_name 等上下文。
+run_stream 保持原行为不变，内部改为复用 run_stream_events。
 """
 
 import json
@@ -55,6 +60,20 @@ class ChatBISystem:
         self.db = self.runtime.db
         self.formatter = self.runtime.formatter
         self.indicator_knowledge = self.runtime.indicator_knowledge
+
+    def rebind_runtime(self, runtime) -> None:
+        """切换到外部已构建的运行时，避免同一次请求重复创建连接池。
+
+        Agent 执行链路会复用同一个 runtime 跑多个子步骤，
+        若每步都新建 ChatBISystem 会为每个子步骤各建一个连接池，
+        既拖慢链路也会迅速打满 MySQL 连接数。
+        """
+        self.runtime = runtime
+        self.parser = runtime.parser
+        self.llm = runtime.llm
+        self.db = runtime.db
+        self.formatter = runtime.formatter
+        self.indicator_knowledge = runtime.indicator_knowledge
 
     def _get_runtime(self, source_id: str | None = None):
         if source_id is None or source_id == self.runtime.source_id:
@@ -373,6 +392,37 @@ class ChatBISystem:
         Yields:
             SSE 格式的事件字符串
         """
+        for event_type, data in self.run_stream_events(
+            user_question=user_question,
+            use_few_shot=use_few_shot,
+            use_rules=use_rules,
+            use_guards=use_guards,
+            use_indicator_knowledge=use_indicator_knowledge,
+            use_schema_linking=use_schema_linking,
+            use_indicator_rag=use_indicator_rag,
+            source_id=source_id,
+            security_context=security_context,
+        ):
+            yield _sse_event(event_type, data)
+
+    def run_stream_events(
+        self,
+        user_question: str,
+        use_few_shot: bool | None = None,
+        use_rules: bool | None = None,
+        use_guards: bool | None = None,
+        use_indicator_knowledge: bool | None = None,
+        use_schema_linking: bool | None = None,
+        use_indicator_rag: bool | None = None,
+        source_id: str | None = None,
+        security_context: UserContext | None = None,
+    ) -> Generator[tuple[str, dict], None, None]:
+        """流式运行完整链路，产出 (事件类型, 事件数据) 二元组。
+
+        与 run_stream 的区别是不做 SSE 字符串编码，
+        以便上层（如 Agent 归因链路）在事件上附加 step_id 等上下文，
+        或直接消费结构化结果。
+        """
         prepared = self._prepare_query(
             user_question=user_question,
             use_few_shot=use_few_shot,
@@ -385,10 +435,10 @@ class ChatBISystem:
             security_context=security_context,
         )
         if prepared is None:
-            yield _sse_event("error", {
+            yield "error", {
                 "error": "输入问题为空",
                 "error_type": "validation"
-            })
+            }
             return
 
         runtime = prepared.runtime
@@ -411,9 +461,9 @@ class ChatBISystem:
                 if not chunk_text:
                     continue  # 跳过空 chunk（部分模型会返回空字符串的 delta）
                 sql_parts.append(chunk_text)
-                yield _sse_event("sql_chunk", {"content": chunk_text})
+                yield "sql_chunk", {"content": chunk_text}
         except Exception as e:
-            yield _sse_event("error", {
+            yield "error", {
                 "error": str(e),
                 "error_type": "llm",
                 "metadata": {
@@ -426,23 +476,24 @@ class ChatBISystem:
                     "security_role": user_context.role,
                     "security_region": user_context.region,
                 }
-            })
+            }
             return
 
         # 5. 拼接完整 SQL 并清理 markdown 标记
         raw_sql = "".join(sql_parts)
         sql = re.sub(r'```sql|```', '', raw_sql).strip()
 
-        yield _sse_event("sql_done", {"sql": sql})
+        yield "sql_done", {"sql": sql}
 
         # 6. 执行 SQL
         try:
             columns, results = runtime.db.execute(sql, user=user_context)
             db_info = getattr(runtime.db, "last_query_info", {})
             rows_dict = [dict(zip(columns, row)) for row in results]
-            yield _sse_event("result", {
+            yield "result", {
                 "columns": columns,
                 "rows": rows_dict,
+                "sql": sql,
                 "row_count": len(results),
                 "metadata": {
                     "detected_indicators": detected_indicators,
@@ -460,9 +511,9 @@ class ChatBISystem:
                     "db_slow_query": db_info.get("slow_query", False),
                     "db_explain_plan": db_info.get("explain_plan", []),
                 }
-            })
+            }
         except SecurityError as e:
-            yield _sse_event("error", {
+            yield "error", {
                 "error": str(e),
                 "error_type": "security",
                 "sql": sql,
@@ -476,9 +527,9 @@ class ChatBISystem:
                     "security_role": user_context.role,
                     "security_region": user_context.region,
                 }
-            })
+            }
         except QueryExecutionError as e:
-            yield _sse_event("error", {
+            yield "error", {
                 "error": str(e),
                 "error_type": f"database_{e.error_type}",
                 "sql": sql,
@@ -495,9 +546,9 @@ class ChatBISystem:
                     "db_error_code": e.metadata.get("error_code"),
                     "db_raw_error": e.metadata.get("raw_error"),
                 }
-            })
+            }
         except Exception as e:
-            yield _sse_event("error", {
+            yield "error", {
                 "error": str(e),
                 "error_type": "database",
                 "sql": sql,
@@ -511,7 +562,7 @@ class ChatBISystem:
                     "security_role": user_context.role,
                     "security_region": user_context.region,
                 }
-            })
+            }
 
 
 def _sse_event(event_type: str, data: dict) -> str:

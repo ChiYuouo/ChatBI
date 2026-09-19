@@ -4,12 +4,17 @@ from typing import Any
 
 from fastapi import Request
 
-from chatbi.api.schemas import QueryRequest
+from chatbi.analysis.analysis_service import AnalysisService
+from chatbi.api.schemas import AnalyzeRequest, QueryRequest
 from chatbi.core.config import APP_CONFIG
 from chatbi.core.security import UserContext
 from chatbi.services.chatbi_service import ChatBISystem
 
 system = ChatBISystem(app_config=APP_CONFIG)
+
+# 归因链路涉及多次 LLM 调用与多步 SQL，实例内只保留无状态编排器，
+# 真实的 runtime 与 LLM 客户端在每次请求时按需构建。
+analysis_service = AnalysisService()
 
 
 def _rows_to_dicts(columns: list[str], results: list[tuple]) -> list[dict[str, Any]]:
@@ -17,7 +22,10 @@ def _rows_to_dicts(columns: list[str], results: list[tuple]) -> list[dict[str, A
     return [dict(zip(columns, row)) for row in results]
 
 
-def _build_user_context(request: Request, payload: QueryRequest) -> UserContext:
+def _build_user_context(
+    request: Request,
+    payload: QueryRequest | AnalyzeRequest,
+) -> UserContext:
     state_context = getattr(request.state, "user_context", UserContext.demo_admin())
     return UserContext(
         user_id=payload.user_id or state_context.user_id,
@@ -46,6 +54,33 @@ def _resolve_query_options(payload: QueryRequest, app_config: dict) -> dict[str,
             payload.use_indicator_rag
             if payload.use_indicator_rag is not None
             else feature_defaults.get("indicator_rag", False)
+        ),
+    }
+
+
+def _resolve_analyze_options(payload: AnalyzeRequest, app_config: dict) -> dict[str, bool]:
+    """解析归因链路的子步骤执行选项。
+
+    归因链路由多个子步骤组成，每次子步骤都要走一遍检索与指标注入，
+    因此这里默认开启 Schema Linking 与指标 RAG 以提升 SQL 质量，
+    可通过请求参数或环境变量单独关闭。
+    """
+    feature_defaults = app_config.get("features", {})
+    return {
+        "use_indicator_knowledge": (
+            payload.use_indicator_knowledge
+            if payload.use_indicator_knowledge is not None
+            else feature_defaults.get("indicator_knowledge", True)
+        ),
+        "use_schema_linking": (
+            payload.use_schema_linking
+            if payload.use_schema_linking is not None
+            else feature_defaults.get("schema_linking", True)
+        ),
+        "use_indicator_rag": (
+            payload.use_indicator_rag
+            if payload.use_indicator_rag is not None
+            else feature_defaults.get("indicator_rag", True)
         ),
     }
 

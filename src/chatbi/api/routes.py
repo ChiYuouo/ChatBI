@@ -1,6 +1,8 @@
 """ChatBI API 路由。"""
 
+import json
 import logging
+from decimal import Decimal
 from time import perf_counter
 
 from fastapi import APIRouter, HTTPException, Request
@@ -8,11 +10,19 @@ from fastapi.responses import StreamingResponse
 
 from chatbi.api.dependencies import (
     _build_user_context,
+    _resolve_analyze_options,
     _resolve_query_options,
     _rows_to_dicts,
+    analysis_service,
     system,
 )
-from chatbi.api.schemas import ErrorResponse, HealthResponse, QueryRequest, QuerySuccessResponse
+from chatbi.api.schemas import (
+    AnalyzeRequest,
+    ErrorResponse,
+    HealthResponse,
+    QueryRequest,
+    QuerySuccessResponse,
+)
 from chatbi.core.config import APP_CONFIG
 
 logger = logging.getLogger("chatbi.api")
@@ -28,6 +38,7 @@ def read_root() -> dict[str, str]:
         "health": "/health",
         "query": "/api/v1/query",
         "query_stream": "/api/v1/query/stream",
+        "analyze_stream": "/api/v1/analyze/stream",
     }
 
 
@@ -124,3 +135,59 @@ async def query_chatbi_stream(payload: QueryRequest, request: Request) -> Stream
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.post(
+    "/api/v1/analyze/stream",
+    tags=["分析"],
+    summary="SSE 流式归因分析（多步执行 + 结论）",
+)
+async def analyze_chatbi_stream(payload: AnalyzeRequest, request: Request) -> StreamingResponse:
+    """对复杂业务问题做归因分析，以 SSE 流式返回全流程进展。
+
+    事件类型见 `chatbi.analysis.analysis_service.AnalysisService.run_stream_events`。
+    归因链路包含拆解、多步 SQL 与报告生成，耗时明显长于单次查询，
+    因此只提供流式接口，前端可实时看到每一步的进展。
+    """
+    logger.info("Analyze request received: %s", payload.question)
+    user_context = _build_user_context(request, payload)
+    analyze_options = _resolve_analyze_options(payload, APP_CONFIG)
+
+    def event_generator():
+        for event_type, data in analysis_service.run_stream_events(
+            user_question=payload.question,
+            max_steps=payload.max_steps,
+            source_id=payload.source_id,
+            security_context=user_context,
+            chatbi_run_options=analyze_options,
+        ):
+            yield _encode_sse(event_type, data)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _encode_sse(event_type: str, data: dict) -> str:
+    """把归因事件编码为 SSE 字符串。
+
+    归因链路的中间结果包含 Decimal 等非标准 JSON 类型，这里统一兜底序列化。
+    """
+    payload = json.dumps(
+        data,
+        ensure_ascii=False,
+        default=_json_default,
+    )
+    return f"event: {event_type}\ndata: {payload}\n\n"
+
+
+def _json_default(value):
+    if isinstance(value, Decimal):
+        return float(value)
+    return str(value)

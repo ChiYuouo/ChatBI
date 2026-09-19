@@ -11,9 +11,11 @@ import argparse
 import json
 import re
 import sys
+import threading
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Callable, Literal
+from queue import Queue
+from typing import Any, Callable, Generator, Literal
 
 import pymysql
 from pydantic import BaseModel, Field
@@ -68,6 +70,9 @@ class StepExecutionResult(BaseModel):
     rows: list[dict[str, Any]] = Field(default_factory=list)
     formatted: str = ""
     error: str | None = None
+    error_type: str | None = None
+    # 是否已因报错重写过 SQL（用于前端提示与排查）
+    repaired: bool = False
 
 
 class ExecutionSummary(BaseModel):
@@ -318,6 +323,10 @@ class TempTableResultStore(IntermediateResultStore):
 class StepExecutor:
     """顺序执行计划中的每个步骤。"""
 
+    # 只有「SQL 本身写错」才值得带错误上下文重写。
+    # 权限 / 超时 / 连接 / 安全策略类失败重试没有意义。
+    _REPAIRABLE_ERROR_TYPES = frozenset({"sql_syntax", "execution_error"})
+
     def __init__(
         self,
         step_runner: StepRunner | None = None,
@@ -336,6 +345,11 @@ class StepExecutor:
             "use_indicator_knowledge": True,
         }
         self.step_runner = step_runner or self._run_with_chatbi
+        # 记录是否为外部注入的自定义执行器。
+        # 不能用 `self.step_runner is self._run_with_chatbi` 判断：
+        # Python 每次访问绑定方法都会新建方法对象，is 比较恒为 False，
+        # 会导致流式分支永远走不到。
+        self._uses_default_runner = step_runner is None
         self.max_retries = max_retries
         self.failure_policy = failure_policy
         self.storage_backend = storage_backend
@@ -354,7 +368,22 @@ class StepExecutor:
         plan: ExecutionPlan,
         max_steps: int | None = None,
     ) -> list[StepExecutionResult]:
-        results: list[StepExecutionResult] = []
+        """阻塞执行整份计划，返回每步结果。"""
+        return [
+            result
+            for _, result in self.iter_execute_plan(plan, max_steps=max_steps)
+        ]
+
+    def iter_execute_plan(
+        self,
+        plan: ExecutionPlan,
+        max_steps: int | None = None,
+    ):
+        """逐步骤执行计划，每完成一步即产出 (步骤, 结果)。
+
+        这是 execute_plan（阻塞）与 execute_plan_streaming（流式）共用的执行内核：
+        阻塞路径只取结果，流式路径则在每步前后向外部推送事件。
+        """
         results_by_step: dict[str, StepExecutionResult] = {}
         steps_to_run = plan.steps[:max_steps] if max_steps is not None else plan.steps
         abort_triggered = False
@@ -371,8 +400,8 @@ class StepExecutor:
                     step=step,
                     error="前序步骤失败，当前执行策略为 abort，后续步骤停止执行。",
                 )
-                results.append(skipped)
                 results_by_step[step.step_id] = skipped
+                yield step, skipped
                 continue
 
             if self._has_failed_dependency(step.depends_on, results_by_step):
@@ -383,8 +412,8 @@ class StepExecutor:
                     step=step,
                     error="依赖步骤失败，当前步骤已跳过。",
                 )
-                results.append(skipped)
                 results_by_step[step.step_id] = skipped
+                yield step, skipped
                 continue
 
             _print_progress(
@@ -420,54 +449,364 @@ class StepExecutor:
                     f"{step.step_id} 执行失败：{normalized.error or '未知错误'}"
                 )
 
-            results.append(normalized)
             results_by_step[step.step_id] = normalized
+            yield step, normalized
 
-        completed_steps = sum(1 for result in results if result.status == "completed")
-        failed_steps = sum(1 for result in results if result.status == "failed")
-        skipped_steps = sum(1 for result in results if result.status == "skipped")
+        completed_steps = sum(1 for result in results_by_step.values() if result.status == "completed")
+        failed_steps = sum(1 for result in results_by_step.values() if result.status == "failed")
+        skipped_steps = sum(1 for result in results_by_step.values() if result.status == "skipped")
         _print_progress(
             f"执行计划结束：completed={completed_steps}, failed={failed_steps}, skipped={skipped_steps}"
         )
-        return results
 
-    def _run_with_chatbi(self, question: str) -> dict[str, Any]:
+    def execute_plan_streaming(
+        self,
+        plan: ExecutionPlan,
+        max_steps: int | None = None,
+    ) -> Generator[tuple[str, dict[str, Any]], None, None]:
+        """流式执行计划，并把每个步骤内部的 SQL 生成过程也实时透传出来。
+
+        与 execute_plan（阻塞收集）的差别在于：本方法不会等步骤跑完才推送，
+        而是把步骤内部 LLM 产出的每个 SQL 片段立即转发，
+        前端因此能看到「第 2 步正在写 SQL…」这样的实时进展。
+
+        事件类型（每个事件都带 step_id / step_name，便于前端归位到对应步骤）：
+        - plan_ready: 计划就绪，含全部步骤定义
+        - step_start: 某个步骤开始执行
+        - step_sql_chunk: 该步骤内 LLM 流式产出的 SQL 片段
+        - step_sql_done: 该步骤 SQL 生成完毕
+        - step_result: 该步骤查询结果
+        - step_retry: 该步骤失败后重试（mode=rewrite 表示带报错重写）
+        - step_done: 该步骤结束（含成功/失败/跳过）
+        """
+        total_steps = len(plan.steps[:max_steps] if max_steps is not None else plan.steps)
+        yield "plan_ready", {
+            "original_question": plan.original_question,
+            "question_type": plan.question_type,
+            "analysis_goal": plan.analysis_goal,
+            "total_steps": total_steps,
+            "steps": [step.model_dump() for step in plan.steps],
+        }
+
+        blocker = None
+        results_by_step: dict[str, StepExecutionResult] = {}
+        steps_to_run = plan.steps[:max_steps] if max_steps is not None else plan.steps
+        abort_triggered = False
+
+        for index, step in enumerate(steps_to_run, start=1):
+            yield "step_start", {
+                "step_id": step.step_id,
+                "task_id": step.task_id,
+                "step_name": step.step_name,
+                "task_type": step.task_type,
+                "question": step.question,
+                "description": step.description,
+                "depends_on": step.depends_on,
+                "metrics": step.metrics,
+                "dimensions": step.dimensions,
+                "expected_output": step.expected_output,
+                "index": index,
+                "total_steps": total_steps,
+            }
+
+            if abort_triggered or self._has_failed_dependency(step.depends_on, results_by_step):
+                reason = (
+                    "前序步骤失败，当前执行策略为 abort，后续步骤停止执行。"
+                    if abort_triggered
+                    else "依赖步骤失败，当前步骤已跳过。"
+                )
+                result = self._build_skipped_result(step=step, error=reason)
+                results_by_step[step.step_id] = result
+                yield "step_done", self._build_step_done_payload(step, result)
+                continue
+
+            dependency_context = self._build_dependency_context(
+                step.depends_on,
+                results_by_step,
+            )
+            composed_question = self._compose_question(step.question, dependency_context)
+
+            # _execute_streaming_step 是生成器：先把步骤内部的 SQL 片段等
+            # 子事件实时转发出去，最后一个 yield 才是该步骤的执行结果。
+            result: StepExecutionResult | None = None
+            for sub_event_type, sub_payload in self._execute_streaming_step(
+                step=step,
+                question=composed_question,
+                context_used=dependency_context,
+            ):
+                if sub_event_type == "_step_result":
+                    result = sub_payload["result"]
+                    continue
+                yield sub_event_type, sub_payload
+
+            if result is None:
+                result = self._build_skipped_result(
+                    step=step,
+                    error="步骤执行未返回结果。",
+                )
+
+            if result.success:
+                result.result_reference = self._store_intermediate_result(
+                    step.step_id,
+                    result.columns,
+                    result.rows,
+                )
+                result.storage_backend = self.storage_backend
+            elif self.failure_policy == "abort":
+                abort_triggered = True
+
+            results_by_step[step.step_id] = result
+            yield "step_done", self._build_step_done_payload(step, result)
+
+    def _execute_streaming_step(
+        self,
+        step: PlanStep,
+        question: str,
+        context_used: str,
+    ) -> Generator[tuple[str, dict[str, Any]], None, None]:
+        """在单独线程里跑一个步骤，同时把该步骤的 SSE 子事件转发出来。
+
+        步骤内部的 LLM 流式生成是同步生成器，无法直接在其中一边跑
+        一边 yield 到外层事件流，因此放到工作线程执行，
+        由队列把子事件中转回当前生成器。
+        最后一个产出的内部事件 _step_result 携带该步骤的执行结果。
+        """
+        queue: Queue = Queue()
+        holder: dict[str, Any] = {}
+
+        def _worker() -> None:
+            try:
+                holder["result"] = self._execute_with_retry(
+                    step=step,
+                    question=question,
+                    context_used=context_used,
+                    event_sink=queue.put,
+                )
+            except BaseException as exc:  # noqa: BLE001 - 需原样回传给主线程
+                holder["error"] = exc
+            finally:
+                queue.put(None)
+
+        thread = threading.Thread(
+            target=_worker,
+            name=f"chatbi-step-{step.step_id}",
+            daemon=True,
+        )
+        thread.start()
+
+        try:
+            while True:
+                item = queue.get()
+                if item is None:
+                    break
+                event_type, payload = item
+                yield event_type, {
+                    "step_id": step.step_id,
+                    "step_name": step.step_name,
+                    **payload,
+                }
+        finally:
+            thread.join(timeout=1)
+
+        if holder.get("error") is not None:
+            raise holder["error"]
+
+        # 用一个内部事件把最终结果带出生成器，避免额外引入第三返回值
+        yield "_step_result", {"result": holder["result"]}
+
+    @staticmethod
+    def _build_step_done_payload(
+        step: PlanStep,
+        result: StepExecutionResult,
+    ) -> dict[str, Any]:
+        return {
+            "step_id": step.step_id,
+            "task_id": step.task_id,
+            "step_name": step.step_name,
+            "success": result.success,
+            "status": result.status,
+            "attempts": result.attempts,
+            "sql": result.sql,
+            "columns": result.columns,
+            "rows": result.rows,
+            "row_count": len(result.rows),
+            "formatted": result.formatted,
+            "result_reference": result.result_reference,
+            "error": result.error,
+            "error_type": result.error_type,
+            "repaired": result.repaired,
+        }
+
+    def _run_with_chatbi(
+        self,
+        question: str,
+        event_sink: Callable[[tuple[str, dict[str, Any]]], None] | None = None,
+    ) -> dict[str, Any]:
         if self.system is None:
             self.system = ChatBISystem()
 
-        return self.system.run(
+        if event_sink is None:
+            return self.system.run(
+                user_question=question,
+                **self.chatbi_run_options,
+            )
+
+        # 流式路径：把子链路的每个事件实时转发给上层，同时收集最终结果
+        sql_parts: list[str] = []
+        final_payload: dict[str, Any] | None = None
+        error_payload: dict[str, Any] | None = None
+
+        for event_type, data in self.system.run_stream_events(
             user_question=question,
             **self.chatbi_run_options,
-        )
+        ):
+            if event_type == "sql_chunk":
+                sql_parts.append(data.get("content", ""))
+            elif event_type == "sql_done":
+                event_sink(("step_sql_done", {"sql": data.get("sql", "")}))
+            elif event_type == "result":
+                final_payload = data
+                event_sink((
+                    "step_result",
+                    {
+                        "columns": data.get("columns", []),
+                        "rows": data.get("rows", []),
+                        "row_count": data.get("row_count", 0),
+                    },
+                ))
+            elif event_type == "error":
+                error_payload = data
+                event_sink(("step_error", {
+                    "error": data.get("error"),
+                    "error_type": data.get("error_type"),
+                }))
+
+            if event_type != "sql_chunk":
+                continue
+            event_sink(("step_sql_chunk", {"content": data.get("content", "")}))
+
+        if error_payload is not None:
+            return {
+                "success": False,
+                "sql": error_payload.get("sql") or "".join(sql_parts).strip(),
+                "error": error_payload.get("error"),
+                "error_type": error_payload.get("error_type"),
+            }
+
+        if final_payload is None:
+            return {
+                "success": False,
+                "sql": "".join(sql_parts).strip(),
+                "error": "查询链路未返回结果",
+                "error_type": "empty_result",
+            }
+
+        columns = final_payload.get("columns", [])
+        rows_dict = final_payload.get("rows", [])
+        return {
+            "success": True,
+            "sql": final_payload.get("sql") or "".join(sql_parts).strip(),
+            "columns": columns,
+            "results": [tuple(row.get(col) for col in columns) for row in rows_dict],
+            "metadata": final_payload.get("metadata", {}),
+        }
 
     def _execute_with_retry(
         self,
         step: PlanStep,
         question: str,
         context_used: str,
+        event_sink: Callable[[tuple[str, dict[str, Any]]], None] | None = None,
     ) -> StepExecutionResult:
-        last_result: StepExecutionResult | None = None
+        """执行单个步骤，失败时按失败类型选择重试方式。
 
-        for attempt in range(1, self.max_retries + 2):
-            if attempt > 1:
+        两类重试要分开处理：
+        - SQL 本身写错（sql_syntax / execution_error）：单纯重发同一个问题没有意义，
+          模型多半会犯同样的错。这类失败要带上「上一次生成的 SQL + 数据库报错」
+          一起重问，模型看到具体症状才有机会改对。
+        - 其他失败（连接超时、锁等待等瞬时故障）：沿用原问题重试即可，
+          瞬时故障重试本身就常能成功。
+
+        max_retries=0 时只执行一次，行为与重构前一致。
+        """
+        last_result: StepExecutionResult | None = None
+        max_attempts = self.max_retries + 1
+
+        for attempt in range(1, max_attempts + 1):
+            current_question = question
+            if attempt > 1 and last_result is not None:
+                rewrite = self._should_rewrite(last_result)
+                if rewrite:
+                    current_question = self._build_repair_question(question, last_result)
                 _print_progress(
-                    f"{step.step_id} 开始第 {attempt} 次尝试：{step.step_name}"
+                    f"{step.step_id} 第 {attempt}/{max_attempts} 次尝试："
+                    + ("按数据库报错重写 SQL" if rewrite else "原样重试")
                 )
-            raw_result = self.step_runner(question)
+                if event_sink is not None:
+                    event_sink((
+                        "step_retry",
+                        {
+                            "attempt": attempt,
+                            "max_attempts": max_attempts,
+                            "mode": "rewrite" if rewrite else "retry",
+                            "previous_sql": last_result.sql,
+                            "previous_error": last_result.error,
+                        },
+                    ))
+
+            raw_result = self._invoke_step_runner(current_question, event_sink)
             normalized = self._normalize_result(
                 step=step,
-                question=question,
+                question=question,  # 记录原始问题，不写入修复上下文
                 context_used=context_used,
                 raw_result=raw_result,
                 attempts=attempt,
                 storage_backend=self.storage_backend,
             )
             if normalized.success:
+                normalized.repaired = attempt > 1
                 return normalized
+
             last_result = normalized
 
         assert last_result is not None
         return last_result
+
+    @classmethod
+    def _should_rewrite(cls, result: StepExecutionResult) -> bool:
+        """判断这次失败是否应该带错误上下文重写 SQL。"""
+        return (result.error_type or "") in cls._REPAIRABLE_ERROR_TYPES
+
+    @staticmethod
+    def _build_repair_question(
+        question: str,
+        failed_result: StepExecutionResult,
+    ) -> str:
+        """在原始问题后追加「上次 SQL + 报错 + 修正要求」。"""
+        return (
+            f"{question}\n\n"
+            "【上一次尝试失败，请修正后重新生成 SQL】\n"
+            f"上一次生成的 SQL：\n{failed_result.sql or '（未生成 SQL）'}\n\n"
+            f"数据库返回的错误：\n{failed_result.error or '未知错误'}\n\n"
+            "修正要求：\n"
+            "1. 只修正导致报错的部分，保持原本的查询意图、统计口径、维度和过滤条件不变。\n"
+            "2. MySQL 8 默认启用 ONLY_FULL_GROUP_BY：SELECT / HAVING / ORDER BY 中的每一列，\n"
+            "   必须出现在 GROUP BY 中，或被聚合函数（SUM/COUNT/MAX/MIN/AVG）包裹。\n"
+            "   注意 COALESCE / IFNULL / CASE / ROUND 都是标量函数，不算聚合，\n"
+            "   套一层并不能让非聚合列变合法。\n"
+            "3. 不要因为报错就删掉必要的指标或维度，也不要改成与问题无关的查询。\n"
+            "4. 只返回修正后的 SQL。"
+        )
+
+    def _invoke_step_runner(
+        self,
+        question: str,
+        event_sink: Callable[[tuple[str, dict[str, Any]]], None] | None,
+    ) -> dict[str, Any]:
+        """调用步骤执行器，兼容自定义 step_runner 与内置 ChatBI 链路。"""
+        if event_sink is None or not self._uses_default_runner:
+            return self.step_runner(question)
+        return self._run_with_chatbi(question, event_sink=event_sink)
 
     @staticmethod
     def _compose_question(step_question: str, dependency_context: str) -> str:
@@ -593,6 +932,7 @@ class StepExecutor:
             rows=normalized_rows,
             formatted=raw_result.get("formatted", ""),
             error=raw_result.get("error"),
+            error_type=raw_result.get("error_type"),
         )
 
     def _store_intermediate_result(
@@ -634,6 +974,7 @@ class StepExecutor:
             question=step.question,
             depends_on=step.depends_on,
             error=error,
+            error_type="dependency_failed",
         )
 
 
