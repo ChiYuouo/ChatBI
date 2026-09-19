@@ -142,7 +142,13 @@ ERROR_GUARDS = """
   exchange_rates 表做汇率转换
 - 过滤遗漏：所有收入类统计必须包含 WHERE order_status = 'completed'
 - 时间边界：使用 >= 和 < 组合表示闭开区间；“最近N个月”按 DATE_SUB(CURDATE(), INTERVAL N MONTH) 处理
-- 聚合维度：GROUP BY 字段必须与 SELECT 中的非聚合字段完全一致
+- 聚合维度（重要）：MySQL 8 默认启用 ONLY_FULL_GROUP_BY，SELECT / HAVING / ORDER BY
+  中的每一列必须满足三者之一：①出现在 GROUP BY 中；②被聚合函数包裹（SUM/COUNT/MAX/MIN/AVG）；
+  ③与某个 GROUP BY 列有函数依赖（如该列是主键）。
+  特别注意：COALESCE / IFNULL / CASE / ROUND / DATE_FORMAT 等**都是标量函数，不算聚合**，
+  套一层并不会让非聚合列变合法。例如
+  `SUM(a) - COALESCE(f.total, 0)` 会报 1055，必须写成 `SUM(a) - COALESCE(MAX(f.total), 0)`。
+  若某个派生表已按同一个月度分组（每期仅一行），用 MAX() 或 SUM() 包裹即可，语义不变。
 - 字段合法性：不要输出 Schema 中不存在的字段；如果问题里出现未建模维度，优先回退到产品线、区域、客户、月份等已有维度
 """
 

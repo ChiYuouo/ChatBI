@@ -239,7 +239,13 @@ class DatabaseClient:
             "raw_error": error_text,
         }
 
-        if isinstance(exc, pymysql.err.ProgrammingError) or error_code == 1064:
+        # 这些错误码都属于「SQL 写错了」，模型可以据此重写：
+        #   1055 GROUP BY 中缺少非聚合列（ONLY_FULL_GROUP_BY）
+        #   1056 GROUP BY 中出现了聚合函数
+        #   1054 字段不存在   1052 字段名有歧义   1146 表不存在
+        _REPAIRABLE_SQL_CODES = {1064, 1055, 1056, 1054, 1052, 1146}
+
+        if isinstance(exc, pymysql.err.ProgrammingError) or error_code in _REPAIRABLE_SQL_CODES:
             return QueryExecutionError(
                 "sql_syntax",
                 "SQL 语法错误，请检查字段、聚合和别名是否正确",
