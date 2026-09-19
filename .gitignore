@@ -43,3 +43,9 @@ Thumbs.db
 node_modules/
 dist/
 .vite/
+
+# Derived vector index (rebuildable via build_indicator_index / ensure_indexes)
+chroma_db/
+
+# Assistant working memory (project work logs, not source code)
+.workbuddy/
