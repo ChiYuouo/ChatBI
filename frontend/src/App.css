@@ -593,3 +593,13 @@ body {
   border: 1px dashed #e8ecf2;
   border-radius: 8px;
 }
+
+/* 多轮追问被改写后的提示条 */
+.query-rewritten-hint {
+  margin-top: 8px;
+  padding: 6px 12px;
+  background: #f0f7ff;
+  border-left: 3px solid #1677ff;
+  border-radius: 4px;
+  line-height: 1.6;
+}

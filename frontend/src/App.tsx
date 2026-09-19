@@ -15,7 +15,14 @@ import {
   QueryMode,
   QueryRecord,
 } from './types/chatbi';
-import { executeAnalyzeStream, executeStreamQuery, fetchHealth } from './services/chatbiApi';
+import {
+  clearSessionHistory,
+  executeAnalyzeStream,
+  executeStreamQuery,
+  fetchHealth,
+  peekSessionId,
+  resetSessionId,
+} from './services/chatbiApi';
 import './App.css';
 
 /** 归因链路中处于运行态的状态集合 */
@@ -27,11 +34,109 @@ const RUNNING_ANALYSIS_STATUS = new Set([
   'reporting',
 ]);
 
+/** 单跳查询中处于运行态的状态集合 */
+const RUNNING_QUERY_STATUS = new Set(['generating_sql', 'executing_query']);
+
+/* ==================== 对话记录的本地持久化 ==================== */
+
+const FEED_STORAGE_KEY = 'chatbi_feed';
+
+/**
+ * 只保留最近 N 条。
+ * sessionStorage 上限约 5MB，而单条记录可能含大量结果行，
+ * 必须截断，否则写满配额会导致后续写入静默失败。
+ */
+const MAX_PERSISTED_ITEMS = 20;
+
+/** 刷新后运行中的记录已无法续跑，恢复时统一标记为中断 */
+function reviveFeedItem(raw: any): FeedItem | null {
+  if (!raw || !raw.record) return null;
+
+  const record = { ...raw.record, createdAt: new Date(raw.record.createdAt) };
+
+  if (raw.kind === 'query') {
+    if (RUNNING_QUERY_STATUS.has(record.status)) {
+      record.status = 'cancelled';
+      record.error = '页面刷新导致查询中断';
+      record.errorType = 'interrupted';
+    }
+    return { kind: 'query', record };
+  }
+
+  if (raw.kind === 'analysis') {
+    if (RUNNING_ANALYSIS_STATUS.has(record.status)) {
+      record.status = 'cancelled';
+      record.error = '页面刷新导致分析中断';
+      record.errorType = 'interrupted';
+    }
+    // 步骤级的 running 不处理会一直转圈，恢复时退化为「已跳过」
+    record.steps = (record.steps || []).map((step: any) =>
+      step.status === 'running' ? { ...step, status: 'skipped' } : step
+    );
+    return { kind: 'analysis', record };
+  }
+
+  return null;
+}
+
+function loadPersistedFeed(): FeedItem[] {
+  try {
+    const raw = sessionStorage.getItem(FEED_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map(reviveFeedItem)
+      .filter((item): item is FeedItem => item !== null);
+  } catch {
+    return [];
+  }
+}
+
+/** 丢掉结果行，只保留结构与 SQL（配额不足时的降级形态） */
+function stripRows(item: FeedItem): FeedItem {
+  if (item.kind === 'query') {
+    return { kind: 'query', record: { ...item.record, rows: undefined } };
+  }
+  return {
+    kind: 'analysis',
+    record: {
+      ...item.record,
+      steps: item.record.steps.map((step) => ({ ...step, rows: undefined })),
+    },
+  };
+}
+
+/** 写入 sessionStorage；超配额时降级重试，最终失败也不影响正常使用 */
+function persistFeed(feed: FeedItem[]): void {
+  const recent = feed.slice(0, MAX_PERSISTED_ITEMS);
+  try {
+    sessionStorage.setItem(FEED_STORAGE_KEY, JSON.stringify(recent));
+    return;
+  } catch {
+    // 配额不足，走下面的降级路径
+  }
+  try {
+    sessionStorage.setItem(FEED_STORAGE_KEY, JSON.stringify(recent.map(stripRows)));
+  } catch {
+    console.warn('对话记录持久化失败（存储配额不足），本次会话不再保存历史');
+  }
+}
+
+/** 清空本地保存的对话记录 */
+export function clearPersistedFeed(): void {
+  try {
+    sessionStorage.removeItem(FEED_STORAGE_KEY);
+  } catch {
+    /* storage 不可用时无需处理 */
+  }
+}
+
 export const MainContent: React.FC = () => {
   const [inputQuestion, setInputQuestion] = useState('');
   const [mode, setMode] = useState<QueryMode>('query');
   const [loading, setLoading] = useState(false);
-  const [feed, setFeed] = useState<FeedItem[]>([]);
+  const [feed, setFeed] = useState<FeedItem[]>(loadPersistedFeed);
   const [health, setHealth] = useState<HealthState>({
     status: 'checking',
     databaseConnected: false,
@@ -50,6 +155,13 @@ export const MainContent: React.FC = () => {
     const interval = setInterval(loadHealth, 30000); // 30秒巡检一次
     return () => clearInterval(interval);
   }, [loadHealth]);
+
+  // 对话记录持久化：刷新后仍能看到历史。
+  // debounce 300ms —— 流式过程中 setFeed 会被高频调用，不能每次都写 storage。
+  useEffect(() => {
+    const timer = setTimeout(() => persistFeed(feed), 300);
+    return () => clearTimeout(timer);
+  }, [feed]);
 
   /** 更新指定归因记录 */
   const patchAnalysis = useCallback(
@@ -98,6 +210,18 @@ export const MainContent: React.FC = () => {
       await executeStreamQuery(
         question.trim(),
         {
+          onRewriteDone: (_originalQuestion, rewrittenQuestion) => {
+            setFeed((prev) =>
+              prev.map((item) =>
+                item.kind === 'query' && item.record.id === queryId
+                  ? {
+                      kind: 'query',
+                      record: { ...item.record, rewrittenQuestion },
+                    }
+                  : item
+              )
+            );
+          },
           onSqlChunk: (chunk) => {
             setFeed((prev) =>
               prev.map((item) =>
@@ -407,10 +531,22 @@ export const MainContent: React.FC = () => {
     message.success('已删除记录');
   };
 
-  // 8. 清空所有记录
-  const handleClearAll = () => {
+  // 8. 开启新会话
+  // 合并了原「清空记录」：只清展示、不重置会话会留下一个隐患 ——
+  // 用户以为记录清了，后端其实还在用那些历史做上下文。
+  const handleNewSession = () => {
+    // 先删掉服务端那段历史，再重置本地标识。
+    // 只换 ID 不删数据的话，旧查询记录会一直留在磁盘上。
+    const previousSessionId = peekSessionId();
+    if (previousSessionId) {
+      // 不 await：删除失败也不该拖住界面，本地重置照常进行
+      void clearSessionHistory(previousSessionId);
+    }
+    resetSessionId();
+    clearPersistedFeed();
     setFeed([]);
-    message.success('已清空所有记录');
+    setInputQuestion('');
+    message.success('已开启新会话');
   };
 
   const isLatestRunning = (item: FeedItem, index: number) => {
@@ -427,7 +563,7 @@ export const MainContent: React.FC = () => {
         health={health}
         onRefreshHealth={loadHealth}
         historyCount={feed.length}
-        onClearHistory={handleClearAll}
+        onNewSession={handleNewSession}
       />
 
       <main className="chatbi-main-container">

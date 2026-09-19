@@ -13,6 +13,8 @@ export interface StreamCallbacks {
   onSqlDone: (sql: string, durationMs: number) => void;
   onResult: (data: StreamEventData, totalDurationMs: number) => void;
   onError: (error: string, errorType?: string) => void;
+  /** 多轮追问被改写时触发，便于界面展示「我理解为」 */
+  onRewriteDone?: (originalQuestion: string, rewrittenQuestion: string) => void;
 }
 
 /** 通用 SSE 解析：把响应体逐块解析为 (事件名, 数据) */
@@ -111,6 +113,52 @@ export function getOrCreateSessionId(): string {
   }
 }
 
+/**
+ * 清掉当前会话标识，下一次请求会开启一段新会话。
+ *
+ * 注意：只重置前端标识还不够 —— 后端的历史是按 session_id 存的，
+ * 换了 ID 才会让后端的上下文也从头开始。
+ */
+export function resetSessionId(): void {
+  try {
+    sessionStorage.removeItem(SESSION_STORAGE_KEY);
+  } catch {
+    /* storage 不可用时清掉内存兜底值即可 */
+  }
+  fallbackSessionId = '';
+}
+
+/** 读取当前会话标识；不存在时返回 null（不会创建新的） */
+export function peekSessionId(): string | null {
+  try {
+    return sessionStorage.getItem(SESSION_STORAGE_KEY);
+  } catch {
+    return fallbackSessionId || null;
+  }
+}
+
+/**
+ * 清空指定会话在服务端的历史记录，返回删除条数。
+ *
+ * 「新会话」时必须调用：只换 session_id 不删数据的话，
+ * 旧查询记录（含 SQL）会一直留在磁盘上，用户以为清了其实还在。
+ * 删除失败一律忽略 —— 不能因为它阻断本地的重置动作。
+ */
+export async function clearSessionHistory(sessionId: string): Promise<number> {
+  const apiBase = getApiBaseUrl();
+  try {
+    const response = await fetch(
+      `${apiBase}/api/v1/session/${encodeURIComponent(sessionId)}`,
+      { method: 'DELETE' }
+    );
+    if (!response.ok) return 0;
+    const data = await response.json();
+    return typeof data.deleted === 'number' ? data.deleted : 0;
+  } catch {
+    return 0;
+  }
+}
+
 export async function executeStreamQuery(
   question: string,
   callbacks: StreamCallbacks,
@@ -138,6 +186,13 @@ export async function executeStreamQuery(
 
     await consumeSse(response, (eventType, eventData: StreamEventData) => {
       switch (eventType) {
+        case 'rewrite_done': {
+          callbacks.onRewriteDone?.(
+            eventData.original_question || question,
+            eventData.rewritten_question || ''
+          );
+          break;
+        }
         case 'sql_chunk': {
           if (eventData.content) {
             fullSql += eventData.content;

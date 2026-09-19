@@ -102,6 +102,16 @@ export const QueryCard: React.FC<QueryCardProps> = ({
         </div>
       </div>
 
+      {/* 1.1 多轮追问的改写结果：让用户能核对系统理解得对不对 */}
+      {record.rewrittenQuestion && record.rewrittenQuestion !== record.question && (
+        <div className="query-rewritten-hint">
+          <Text type="secondary" style={{ fontSize: 13 }}>
+            已结合上文理解为：
+            <Text style={{ color: '#1677ff' }}>{record.rewrittenQuestion}</Text>
+          </Text>
+        </div>
+      )}
+
       {/* 2. 执行阶段状态链 (运行中或用户点击查看时展示) */}
       {(showThoughtChain || isStreaming || isExecuting) && (
         <div style={{ marginTop: 12, marginBottom: 12 }}>

@@ -5,7 +5,7 @@ import {
   CheckCircleOutlined,
   CloseCircleOutlined,
   LoadingOutlined,
-  DeleteOutlined,
+  PlusOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
 import { HealthState } from '../types/chatbi';
@@ -16,14 +16,15 @@ interface HeaderProps {
   health: HealthState;
   onRefreshHealth: () => void;
   historyCount: number;
-  onClearHistory: () => void;
+  /** 开启新会话：清空展示的同时重置会话标识，让后端上下文也从头开始 */
+  onNewSession: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   health,
   onRefreshHealth,
   historyCount,
-  onClearHistory,
+  onNewSession,
 }) => {
   const getHealthBadge = () => {
     if (health.status === 'checking') {
@@ -79,16 +80,21 @@ export const Header: React.FC<HeaderProps> = ({
       <Space size="middle">
         {getHealthBadge()}
         {historyCount > 0 && (
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            {historyCount} 条记录
+          </Text>
+        )}
+        <Tooltip title="清空当前对话并开启新会话（后端上下文一并重置）">
           <Button
             type="text"
             size="small"
-            icon={<DeleteOutlined />}
-            onClick={onClearHistory}
+            icon={<PlusOutlined />}
+            onClick={onNewSession}
             style={{ color: '#8c8c8c' }}
           >
-            清空记录 ({historyCount})
+            新会话
           </Button>
-        )}
+        </Tooltip>
       </Space>
     </header>
   );

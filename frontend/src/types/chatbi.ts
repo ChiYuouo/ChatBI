@@ -18,6 +18,8 @@ export interface QueryRecord {
   totalDurationMs?: number;
   error?: string;
   errorType?: string;
+  /** 多轮追问被改写后的问题；仅在实际发生改写时有值 */
+  rewrittenQuestion?: string;
   createdAt: Date;
 }
 
@@ -32,6 +34,9 @@ export interface StreamEventData {
   error?: string;
   error_type?: string;
   metadata?: Record<string, any>;
+  /** rewrite_done 事件：改写前后的对比 */
+  original_question?: string;
+  rewritten_question?: string;
 }
 
 export interface HealthState {
