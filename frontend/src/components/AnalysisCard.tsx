@@ -65,7 +65,7 @@ export const AnalysisCard: React.FC<AnalysisCardProps> = ({
 
   const statusMeta = STATUS_LABEL[record.status] || { label: record.status, color: 'default' };
   const executedSteps = record.steps.filter(
-    (step) => step.status === 'success' || step.status === 'failed'
+    (step) => step.status === 'completed' || step.status === 'failed'
   ).length;
   const percent =
     record.totalSteps && record.totalSteps > 0

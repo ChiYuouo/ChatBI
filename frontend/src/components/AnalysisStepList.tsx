@@ -25,7 +25,7 @@ const STATUS_META: Record<
 > = {
   pending: { color: '#bfbfbf', label: '等待中' },
   running: { color: '#1677ff', label: '执行中' },
-  success: { color: '#52c41a', label: '已完成' },
+  completed: { color: '#52c41a', label: '已完成' },
   failed: { color: '#ff4d4f', label: '已失败' },
   skipped: { color: '#8c8c8c', label: '已跳过' },
 };
@@ -34,8 +34,8 @@ const renderStatusIcon = (status: AnalysisStepStatus, index: number) => {
   if (status === 'running') {
     return <LoadingOutlined style={{ color: STATUS_META.running.color, fontSize: 15 }} />;
   }
-  if (status === 'success') {
-    return <CheckCircleFilled style={{ color: STATUS_META.success.color, fontSize: 15 }} />;
+  if (status === 'completed') {
+    return <CheckCircleFilled style={{ color: STATUS_META.completed.color, fontSize: 15 }} />;
   }
   if (status === 'failed') {
     return <CloseCircleFilled style={{ color: STATUS_META.failed.color, fontSize: 15 }} />;

@@ -54,7 +54,14 @@ export type AnalysisStatus =
   | 'cancelled';
 
 /** 单个计划步骤的执行状态 */
-export type AnalysisStepStatus = 'pending' | 'running' | 'success' | 'failed' | 'skipped';
+/**
+ * 步骤状态。
+ *
+ * 取值必须与后端 StepExecutionResult.status 对齐（见 agent_planner.py 的
+ * Literal["completed", "failed", "skipped"]）；pending / running 是前端
+ * 在等待与执行过程中的本地态，后端不会下发。
+ */
+export type AnalysisStepStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
 
 export interface AnalysisSubTask {
   task_id: string;

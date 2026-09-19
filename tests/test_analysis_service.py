@@ -183,3 +183,33 @@ def test_analysis_service_binds_llm_client_to_injected_runtime():
 
     # 拆解与报告都必须走注入的 LLM，避免链路里出现多个模型客户端
     assert llm.sql_calls == 2
+
+
+def test_step_done_status_uses_backend_vocabulary():
+    """步骤状态词必须固定为 completed / failed / skipped。
+
+    前端把它当成契约来做状态映射（AnalysisStepStatus）。曾经因为前端按
+    'success' 判断而后端发 'completed'，导致步骤全部显示「等待中」、
+    进度条也不推进。这里把取值钉住，防止再次漂移。
+    """
+    events = collect_events()
+    done_events = [data for name, data in events if name == "step_done"]
+
+    assert done_events, "至少应有一个步骤结束事件"
+
+    allowed = {"completed", "failed", "skipped"}
+    statuses = {data["status"] for data in done_events}
+    assert statuses <= allowed, f"出现了未约定的步骤状态: {statuses - allowed}"
+
+    # 成功的步骤必须是 completed，不能是 success
+    success_statuses = {data["status"] for data in done_events if data["success"]}
+    assert success_statuses == {"completed"}
+
+
+def test_step_done_payload_exposes_fields_frontend_depends_on():
+    """step_done 载荷必须带上前端渲染所需字段，缺一个就会出现空白或错状态。"""
+    events = collect_events()
+    done = [data for name, data in events if name == "step_done"][0]
+
+    for field in ("step_id", "step_name", "status", "success", "rows", "columns"):
+        assert field in done, f"step_done 缺少字段 {field}"
