@@ -55,6 +55,11 @@ def _resolve_query_options(payload: QueryRequest, app_config: dict) -> dict[str,
             if payload.use_indicator_rag is not None
             else feature_defaults.get("indicator_rag", False)
         ),
+        "use_query_rewrite": (
+            payload.use_query_rewrite
+            if payload.use_query_rewrite is not None
+            else feature_defaults.get("query_rewrite", True)
+        ),
     }
 
 

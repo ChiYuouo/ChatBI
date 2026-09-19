@@ -32,6 +32,7 @@ from chatbi.infrastructure.database import QueryExecutionError
 from chatbi.infrastructure.session_store import SessionStore
 from chatbi.retrieval.indicator_knowledge import IndicatorKnowledge
 from chatbi.text2sql.prompt_builder import build_prompt
+from chatbi.text2sql.query_rewriter import QueryRewriter
 
 
 @dataclass(slots=True)
@@ -42,6 +43,8 @@ class _PreparedQuery:
     detected_indicators: list[str]
     system_msg: str
     prompt: str
+    # 改写后的问题；未启用改写或无需改写时等于原始问题
+    rewritten_question: str = ""
 
 
 class ChatBISystem:
@@ -53,6 +56,7 @@ class ChatBISystem:
         app_config: dict | None = None,
         runtime_factory=build_runtime,
         session_store: SessionStore | None = None,
+        query_rewriter: QueryRewriter | None = None,
     ):
         self.app_config = app_config or APP_CONFIG
         self.runtime_factory = runtime_factory
@@ -63,6 +67,10 @@ class ChatBISystem:
         self.formatter = self.runtime.formatter
         self.indicator_knowledge = self.runtime.indicator_knowledge
         self._session_store = session_store
+        self.query_rewriter = query_rewriter or QueryRewriter()
+        # 默认构造的改写器没有文本生成器，需要在请求时注入当前 runtime 的 LLM；
+        # 外部注入的改写器（例如测试用的假实现）则必须原样保留。
+        self._rewriter_needs_llm = query_rewriter is None
 
     @property
     def session_store(self) -> SessionStore:
@@ -154,6 +162,7 @@ class ChatBISystem:
         source_id: str | None,
         security_context: UserContext | None,
         session_id: str | None = None,
+        use_query_rewrite: bool | None = None,
     ) -> _PreparedQuery | None:
         """完成同步与流式查询共用的解析、知识检索和 Prompt 构造。"""
         runtime = self._get_runtime(source_id)
@@ -165,6 +174,7 @@ class ChatBISystem:
                 "use_indicator_knowledge": use_indicator_knowledge,
                 "use_schema_linking": use_schema_linking,
                 "use_indicator_rag": use_indicator_rag,
+                "use_query_rewrite": use_query_rewrite,
             }
         )
         user_context = security_context or UserContext.demo_admin()
@@ -188,8 +198,24 @@ class ChatBISystem:
                 user_context.user_id,
             )
 
+        # 提问改写：只在有历史时才做 —— 单轮查询没有指代可消解，白白多花一次调用。
+        # 改写失败会降级为原问题，不影响本次查询。
+        rewritten_question = user_question
+        if history and options["use_query_rewrite"]:
+            generator = None
+            if self._rewriter_needs_llm:
+                generator = lambda system_msg, prompt: runtime.llm.generate_text(
+                    system_msg=system_msg,
+                    prompt=prompt,
+                )
+            rewritten_question = self.query_rewriter.rewrite(
+                user_question,
+                history,
+                text_generator=generator,
+            )
+
         system_msg, prompt = build_prompt(
-            user_question,
+            rewritten_question,
             use_few_shot=options["use_few_shot"],
             use_rules=options["use_rules"],
             use_guards=options["use_guards"],
@@ -204,6 +230,7 @@ class ChatBISystem:
             detected_indicators=detected_indicators,
             system_msg=system_msg,
             prompt=prompt,
+            rewritten_question=rewritten_question,
         )
 
     def run(
@@ -218,6 +245,7 @@ class ChatBISystem:
         source_id: str | None = None,
         security_context: UserContext | None = None,
         session_id: str | None = None,
+        use_query_rewrite: bool | None = None,
     ) -> dict:
         """
         运行完整链路
@@ -246,6 +274,7 @@ class ChatBISystem:
             source_id=source_id,
             security_context=security_context,
             session_id=session_id,
+            use_query_rewrite=use_query_rewrite,
         )
         if prepared is None:
             return {
@@ -318,6 +347,7 @@ class ChatBISystem:
                     "used_indicator_knowledge": use_indicator_knowledge,
                     "used_schema_linking": use_schema_linking,
                     "used_indicator_rag": use_indicator_rag,
+                    "rewritten_question": prepared.rewritten_question,
                     "source_id": runtime.source_id,
                     "security_role": user_context.role,
                     "security_region": user_context.region,
@@ -403,6 +433,7 @@ class ChatBISystem:
         source_id: str | None = None,
         security_context: UserContext | None = None,
         session_id: str | None = None,
+        use_query_rewrite: bool | None = None,
     ) -> Generator[str, None, None]:
         """
         流式运行完整链路，按阶段 yield SSE 事件字符串
@@ -440,6 +471,7 @@ class ChatBISystem:
             source_id=source_id,
             security_context=security_context,
             session_id=session_id,
+            use_query_rewrite=use_query_rewrite,
         ):
             yield _sse_event(event_type, data)
 
@@ -455,6 +487,7 @@ class ChatBISystem:
         source_id: str | None = None,
         security_context: UserContext | None = None,
         session_id: str | None = None,
+        use_query_rewrite: bool | None = None,
     ) -> Generator[tuple[str, dict], None, None]:
         """流式运行完整链路，产出 (事件类型, 事件数据) 二元组。
 
@@ -473,6 +506,7 @@ class ChatBISystem:
             source_id=source_id,
             security_context=security_context,
             session_id=session_id,
+            use_query_rewrite=use_query_rewrite,
         )
         if prepared is None:
             yield "error", {
@@ -493,6 +527,13 @@ class ChatBISystem:
         detected_indicators = prepared.detected_indicators
         system_msg = prepared.system_msg
         prompt = prepared.prompt
+
+        # 若本次做了提问改写，先推给前端，便于用户核对理解是否正确
+        if prepared.rewritten_question and prepared.rewritten_question != user_question:
+            yield "rewrite_done", {
+                "original_question": user_question,
+                "rewritten_question": prepared.rewritten_question,
+            }
 
         # 4. 流式生成 SQL —— 逐 chunk 推送（过滤空内容）
         sql_parts = []

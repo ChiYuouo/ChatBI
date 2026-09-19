@@ -23,6 +23,10 @@ class QueryRequest(BaseModel):
     use_indicator_knowledge: bool | None = Field(default=None, description="是否注入指标知识")
     use_schema_linking: bool | None = Field(default=None, description="是否启用 Schema Linking")
     use_indicator_rag: bool | None = Field(default=None, description="是否启用指标 RAG")
+    use_query_rewrite: bool | None = Field(
+        default=None,
+        description="是否启用提问改写（仅在带 session_id 且已有历史时生效）",
+    )
     source_id: str | None = Field(default=None, description="数据源标识；未传时使用系统默认数据源")
     user_id: str | None = Field(default=None, description="用户 ID，可选；未传时优先走请求头")
     user_role: str | None = Field(default=None, description="用户角色：admin / finance / sales")

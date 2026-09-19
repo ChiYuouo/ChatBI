@@ -72,6 +72,7 @@ APP_CONFIG = {
         "indicator_knowledge": os.getenv("FEATURE_INDICATOR_KNOWLEDGE", "true").lower() == "true",
         "schema_linking": os.getenv("FEATURE_SCHEMA_LINKING", "false").lower() == "true",
         "indicator_rag": os.getenv("FEATURE_INDICATOR_RAG", "false").lower() == "true",
+        "query_rewrite": os.getenv("FEATURE_QUERY_REWRITE", "true").lower() == "true",
     },
 }
 
