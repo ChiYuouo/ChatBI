@@ -75,6 +75,42 @@ async function readErrorMessage(response: Response): Promise<string> {
   return parsedMsg;
 }
 
+/* ==================== 会话标识 ==================== */
+
+const SESSION_STORAGE_KEY = 'chatbi_session_id';
+
+function createSessionId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `s-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * 取当前会话 ID，首次调用时生成并写入 sessionStorage。
+ *
+ * 用 sessionStorage 而非 localStorage：同一标签页刷新后仍能接上上下文，
+ * 新开标签页则是一段新会话。
+ * 隐私模式等 storage 不可用时退化为进程内临时 ID —— 刷新会丢上下文，
+ * 但不影响查询本身。
+ */
+let fallbackSessionId = '';
+
+export function getOrCreateSessionId(): string {
+  try {
+    const existing = sessionStorage.getItem(SESSION_STORAGE_KEY);
+    if (existing) return existing;
+    const created = createSessionId();
+    sessionStorage.setItem(SESSION_STORAGE_KEY, created);
+    return created;
+  } catch {
+    if (!fallbackSessionId) {
+      fallbackSessionId = createSessionId();
+    }
+    return fallbackSessionId;
+  }
+}
+
 export async function executeStreamQuery(
   question: string,
   callbacks: StreamCallbacks,
@@ -91,7 +127,7 @@ export async function executeStreamQuery(
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({ question, session_id: getOrCreateSessionId() }),
       signal,
     });
 
