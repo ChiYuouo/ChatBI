@@ -35,6 +35,9 @@ htmlcov/
 *.sqlite3
 reports/
 
+# Local session store (SQLite, created at runtime)
+data/sessions.db*
+
 # OS files
 .DS_Store
 Thumbs.db

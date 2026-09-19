@@ -53,6 +53,9 @@ services:
       # 前端已经走 Nginx 同源反代，这里只是兜底放开直连调试
       CORS_ALLOWED_ORIGINS: http://localhost:8080,http://127.0.0.1:8080
       TZ: Asia/Shanghai
+    volumes:
+      # Persist SQLite session history on the host so it survives container rebuilds
+      - ./data:/app/data
     ports:
       - "8000:8000"
     healthcheck:
