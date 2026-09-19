@@ -5,15 +5,33 @@ import { XProvider } from '@ant-design/x';
 import { Header } from './components/Header';
 import { QueryInputBar } from './components/QueryInputBar';
 import { QueryCard } from './components/QueryCard';
+import { AnalysisCard } from './components/AnalysisCard';
 import { EmptyState } from './components/EmptyState';
-import { HealthState, QueryRecord } from './types/chatbi';
-import { executeStreamQuery, fetchHealth } from './services/chatbiApi';
+import {
+  AnalysisRecord,
+  AnalysisStep,
+  FeedItem,
+  HealthState,
+  QueryMode,
+  QueryRecord,
+} from './types/chatbi';
+import { executeAnalyzeStream, executeStreamQuery, fetchHealth } from './services/chatbiApi';
 import './App.css';
+
+/** 归因链路中处于运行态的状态集合 */
+const RUNNING_ANALYSIS_STATUS = new Set([
+  'decomposing',
+  'planning',
+  'executing',
+  'summarizing',
+  'reporting',
+]);
 
 export const MainContent: React.FC = () => {
   const [inputQuestion, setInputQuestion] = useState('');
+  const [mode, setMode] = useState<QueryMode>('query');
   const [loading, setLoading] = useState(false);
-  const [records, setRecords] = useState<QueryRecord[]>([]);
+  const [feed, setFeed] = useState<FeedItem[]>([]);
   const [health, setHealth] = useState<HealthState>({
     status: 'checking',
     databaseConnected: false,
@@ -33,10 +51,33 @@ export const MainContent: React.FC = () => {
     return () => clearInterval(interval);
   }, [loadHealth]);
 
-  // 2. 发起查询（自然语言 -> SQL -> 执行 -> 结果表格）
-  const handleQuery = async (question: string) => {
-    if (!question.trim() || loading) return;
+  /** 更新指定归因记录 */
+  const patchAnalysis = useCallback(
+    (id: string, updater: (record: AnalysisRecord) => AnalysisRecord) => {
+      setFeed((prev) =>
+        prev.map((item) =>
+          item.kind === 'analysis' && item.record.id === id
+            ? { kind: 'analysis', record: updater(item.record) }
+            : item
+        )
+      );
+    },
+    []
+  );
 
+  /** 更新归因记录中的某个步骤 */
+  const patchStep = useCallback(
+    (id: string, stepId: string, updater: (step: AnalysisStep) => AnalysisStep) => {
+      patchAnalysis(id, (record) => ({
+        ...record,
+        steps: record.steps.map((step) => (step.step_id === stepId ? updater(step) : step)),
+      }));
+    },
+    [patchAnalysis]
+  );
+
+  // 2. 发起单跳查询（自然语言 -> SQL -> 执行 -> 结果表格）
+  const handleQuery = async (question: string) => {
     const queryId = `query_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     const newRecord: QueryRecord = {
       id: queryId,
@@ -46,7 +87,7 @@ export const MainContent: React.FC = () => {
       createdAt: new Date(),
     };
 
-    setRecords((prev) => [newRecord, ...prev]);
+    setFeed((prev) => [{ kind: 'query', record: newRecord }, ...prev]);
     setInputQuestion('');
     setLoading(true);
 
@@ -58,56 +99,72 @@ export const MainContent: React.FC = () => {
         question.trim(),
         {
           onSqlChunk: (chunk) => {
-            setRecords((prev) =>
-              prev.map((rec) =>
-                rec.id === queryId
-                  ? { ...rec, sql: (rec.sql || '') + chunk, status: 'generating_sql' }
-                  : rec
+            setFeed((prev) =>
+              prev.map((item) =>
+                item.kind === 'query' && item.record.id === queryId
+                  ? {
+                      kind: 'query',
+                      record: {
+                        ...item.record,
+                        sql: (item.record.sql || '') + chunk,
+                        status: 'generating_sql',
+                      },
+                    }
+                  : item
               )
             );
           },
           onSqlDone: (finalSql, durationMs) => {
-            setRecords((prev) =>
-              prev.map((rec) =>
-                rec.id === queryId
+            setFeed((prev) =>
+              prev.map((item) =>
+                item.kind === 'query' && item.record.id === queryId
                   ? {
-                      ...rec,
-                      sql: finalSql,
-                      sqlDurationMs: durationMs,
-                      status: 'executing_query',
+                      kind: 'query',
+                      record: {
+                        ...item.record,
+                        sql: finalSql,
+                        sqlDurationMs: durationMs,
+                        status: 'executing_query',
+                      },
                     }
-                  : rec
+                  : item
               )
             );
           },
           onResult: (data, totalDurationMs) => {
-            setRecords((prev) =>
-              prev.map((rec) =>
-                rec.id === queryId
+            setFeed((prev) =>
+              prev.map((item) =>
+                item.kind === 'query' && item.record.id === queryId
                   ? {
-                      ...rec,
-                      columns: data.columns || [],
-                      rows: data.rows || [],
-                      rowCount: data.row_count ?? (data.rows ? data.rows.length : 0),
-                      formatted: data.formatted,
-                      totalDurationMs,
-                      status: 'success',
+                      kind: 'query',
+                      record: {
+                        ...item.record,
+                        columns: data.columns || [],
+                        rows: data.rows || [],
+                        rowCount: data.row_count ?? (data.rows ? data.rows.length : 0),
+                        formatted: data.formatted,
+                        totalDurationMs,
+                        status: 'success',
+                      },
                     }
-                  : rec
+                  : item
               )
             );
           },
           onError: (errMsg, errorType) => {
-            setRecords((prev) =>
-              prev.map((rec) =>
-                rec.id === queryId
+            setFeed((prev) =>
+              prev.map((item) =>
+                item.kind === 'query' && item.record.id === queryId
                   ? {
-                      ...rec,
-                      error: errMsg,
-                      errorType: errorType || 'database',
-                      status: 'error',
+                      kind: 'query',
+                      record: {
+                        ...item.record,
+                        error: errMsg,
+                        errorType: errorType || 'database',
+                        status: 'error',
+                      },
                     }
-                  : rec
+                  : item
               )
             );
           },
@@ -117,16 +174,19 @@ export const MainContent: React.FC = () => {
     } catch (err: any) {
       if (err.name === 'AbortError') {
         message.info('已取消查询请求');
-        setRecords((prev) =>
-          prev.map((rec) =>
-            rec.id === queryId
+        setFeed((prev) =>
+          prev.map((item) =>
+            item.kind === 'query' && item.record.id === queryId
               ? {
-                  ...rec,
-                  error: '用户主动取消查询',
-                  errorType: 'cancelled',
-                  status: 'cancelled',
+                  kind: 'query',
+                  record: {
+                    ...item.record,
+                    error: '用户主动取消查询',
+                    errorType: 'cancelled',
+                    status: 'cancelled',
+                  },
                 }
-              : rec
+              : item
           )
         );
       } else {
@@ -138,7 +198,191 @@ export const MainContent: React.FC = () => {
     }
   };
 
-  // 3. 取消查询
+  // 3. 发起归因分析（拆解 -> 多步执行 -> 汇总 -> 报告）
+  const handleAnalyze = async (question: string) => {
+    const analysisId = `analysis_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const startedAt = performance.now();
+
+    const newRecord: AnalysisRecord = {
+      id: analysisId,
+      question: question.trim(),
+      status: 'decomposing',
+      steps: [],
+      createdAt: new Date(),
+    };
+
+    setFeed((prev) => [{ kind: 'analysis', record: newRecord }, ...prev]);
+    setInputQuestion('');
+    setLoading(true);
+
+    const abortCtrl = new AbortController();
+    abortControllerRef.current = abortCtrl;
+
+    try {
+      await executeAnalyzeStream(
+        question.trim(),
+        {
+          onStart: () => patchAnalysis(analysisId, (r) => ({ ...r, status: 'decomposing' })),
+
+          onDecompositionStart: () =>
+            patchAnalysis(analysisId, (r) => ({ ...r, status: 'decomposing' })),
+
+          onDecompositionDone: (data) =>
+            patchAnalysis(analysisId, (r) => ({
+              ...r,
+              status: 'planning',
+              decomposition: data,
+              analysisGoal: data?.analysis_goal,
+              questionType: data?.question_type,
+            })),
+
+          onPlanReady: (data) =>
+            patchAnalysis(analysisId, (r) => ({
+              ...r,
+              status: 'executing',
+              totalSteps: data?.total_steps,
+              analysisGoal: data?.analysis_goal ?? r.analysisGoal,
+              questionType: data?.question_type ?? r.questionType,
+            })),
+
+          onStepStart: (data) =>
+            patchAnalysis(analysisId, (r) => {
+              const exists = r.steps.some((step) => step.step_id === data.step_id);
+              const steps = exists
+                ? r.steps.map((step) =>
+                    step.step_id === data.step_id
+                      ? { ...step, ...data, status: 'running' as const }
+                      : step
+                  )
+                : [...r.steps, { ...data, status: 'running' as const }];
+
+              return {
+                ...r,
+                status: 'executing',
+                steps,
+                totalSteps: data.total_steps ?? r.totalSteps,
+              };
+            }),
+
+          onStepSqlChunk: ({ step_id, content }) =>
+            patchStep(analysisId, step_id, (step) => ({
+              ...step,
+              sqlStream: (step.sqlStream || '') + content,
+            })),
+
+          onStepSqlDone: ({ step_id, sql }) =>
+            patchStep(analysisId, step_id, (step) => ({ ...step, sql })),
+
+          onStepResult: ({ step_id, columns, rows, row_count }) =>
+            patchStep(analysisId, step_id, (step) => ({
+              ...step,
+              columns,
+              rows,
+              rowCount: row_count,
+            })),
+
+          onStepDone: (data) =>
+            patchAnalysis(analysisId, (r) => ({
+              ...r,
+              steps: r.steps.map((step) =>
+                step.step_id === data.step_id
+                  ? {
+                      ...step,
+                      ...data,
+                      // 保留运行期累积的 SQL 流式内容，避免被空值覆盖
+                      sql: data.sql || step.sql || step.sqlStream,
+                      sqlStream: undefined,
+                      errorType: (data as any).error_type ?? step.errorType,
+                      repaired: (data as any).repaired ?? step.repaired,
+                    }
+                  : step
+              ),
+            })),
+
+          onStepRetry: ({ step_id, attempt, max_attempts, mode, previous_sql, previous_error }) =>
+            patchStep(analysisId, step_id, (step) => ({
+              ...step,
+              // 重写期间给个明确状态，避免用户以为卡住
+              status: 'running',
+              error: undefined,
+              retries: [
+                ...(step.retries || []),
+                {
+                  attempt,
+                  maxAttempts: max_attempts,
+                  mode,
+                  previousSql: previous_sql,
+                  previousError: previous_error,
+                },
+              ],
+            })),
+
+          onStepError: ({ step_id, error }) =>
+            patchStep(analysisId, step_id, (step) => ({
+              ...step,
+              status: 'failed',
+              error,
+            })),
+
+          onSummaryDone: (data) =>
+            patchAnalysis(analysisId, (r) => ({ ...r, status: 'summarizing', summary: data })),
+
+          onReportStart: () => patchAnalysis(analysisId, (r) => ({ ...r, status: 'reporting' })),
+
+          onReportDone: (data) =>
+            patchAnalysis(analysisId, (r) => ({ ...r, status: 'success', report: data })),
+
+          onDone: () =>
+            patchAnalysis(analysisId, (r) => ({
+              ...r,
+              status: 'success',
+              totalDurationMs: Math.round(performance.now() - startedAt),
+            })),
+
+          onError: (errMsg, errorType) =>
+            patchAnalysis(analysisId, (r) => ({
+              ...r,
+              status: 'error',
+              error: errMsg,
+              errorType: errorType || 'analysis',
+              totalDurationMs: Math.round(performance.now() - startedAt),
+            })),
+        },
+        { signal: abortCtrl.signal }
+      );
+    } catch (err: any) {
+      if (err.name === 'AbortError') {
+        message.info('已取消归因分析');
+        patchAnalysis(analysisId, (r) => ({
+          ...r,
+          status: 'cancelled',
+          error: '用户主动取消分析',
+        }));
+      } else {
+        message.error(err.message || '归因分析异常中断');
+        patchAnalysis(analysisId, (r) => ({
+          ...r,
+          status: 'error',
+          error: err.message || '归因分析异常中断',
+        }));
+      }
+    } finally {
+      setLoading(false);
+      abortControllerRef.current = null;
+    }
+  };
+
+  // 4. 提交入口：按当前模式分流
+  const handleSubmit = (question: string) => {
+    if (!question.trim() || loading) return;
+    if (mode === 'analyze') {
+      handleAnalyze(question);
+    } else {
+      handleQuery(question);
+    }
+  };
+
+  // 5. 取消当前请求
   const handleCancel = () => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -146,60 +390,81 @@ export const MainContent: React.FC = () => {
     }
   };
 
-  // 4. 重试查询
-  const handleRetry = (question: string) => {
+  // 6. 重试：沿用记录自身的类型，避免混用两种链路
+  const handleRetryQuery = (question: string) => {
     setInputQuestion(question);
     handleQuery(question);
   };
 
-  // 5. 删除记录
+  const handleRetryAnalysis = (question: string) => {
+    setInputQuestion(question);
+    handleAnalyze(question);
+  };
+
+  // 7. 删除记录
   const handleDeleteRecord = (id: string) => {
-    setRecords((prev) => prev.filter((r) => r.id !== id));
+    setFeed((prev) => prev.filter((item) => item.record.id !== id));
     message.success('已删除记录');
   };
 
-  // 6. 清空所有记录
+  // 8. 清空所有记录
   const handleClearAll = () => {
-    setRecords([]);
-    message.success('已清空所有查询记录');
+    setFeed([]);
+    message.success('已清空所有记录');
+  };
+
+  const isLatestRunning = (item: FeedItem, index: number) => {
+    if (index !== 0 || !loading) return false;
+    if (item.kind === 'query') {
+      return item.record.status === 'generating_sql' || item.record.status === 'executing_query';
+    }
+    return RUNNING_ANALYSIS_STATUS.has(item.record.status);
   };
 
   return (
     <div className="chatbi-app-layout">
-      {/* 顶部 Header */}
       <Header
         health={health}
         onRefreshHealth={loadHealth}
-        historyCount={records.length}
+        historyCount={feed.length}
         onClearHistory={handleClearAll}
       />
 
-      {/* 主体工作台容器 */}
       <main className="chatbi-main-container">
-        {/* 输入与快捷提示区 */}
         <QueryInputBar
           value={inputQuestion}
           onChange={setInputQuestion}
-          onSubmit={handleQuery}
+          onSubmit={handleSubmit}
           onCancel={handleCancel}
           loading={loading}
           disabled={false}
+          mode={mode}
+          onModeChange={setMode}
         />
 
-        {/* 历史卡片流或初始欢迎界面 */}
         <div className="chatbi-feed-section">
-          {records.length === 0 ? (
+          {feed.length === 0 ? (
             <EmptyState />
           ) : (
-            records.map((record, index) => (
-              <QueryCard
-                key={record.id}
-                record={record}
-                onRetry={handleRetry}
-                onDelete={handleDeleteRecord}
-                isLatestRunning={index === 0 && loading}
-              />
-            ))
+            feed.map((item, index) =>
+              item.kind === 'query' ? (
+                <QueryCard
+                  key={item.record.id}
+                  record={item.record}
+                  onRetry={handleRetryQuery}
+                  onDelete={handleDeleteRecord}
+                  isLatestRunning={isLatestRunning(item, index)}
+                />
+              ) : (
+                <AnalysisCard
+                  key={item.record.id}
+                  record={item.record}
+                  onRetry={handleRetryAnalysis}
+                  onDelete={handleDeleteRecord}
+                  isLatestRunning={isLatestRunning(item, index)}
+                />
+              )
+            )
           )}
         </div>
       </main>

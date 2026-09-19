@@ -294,3 +294,302 @@ body {
 .feature-icon {
   margin-bottom: 4px;
 }
+
+/* ==================== 归因分析 ==================== */
+
+/* 输入区模式切换 */
+.input-mode-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+/* 归因卡片标识与普通查询区分开 */
+.q-badge.analysis-badge {
+  background: #722ed1;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+}
+
+.analysis-card-item {
+  border: 1px solid #ede7f6;
+}
+
+/* 运行中的总进度条 */
+.analysis-progress-wrapper {
+  margin-top: 12px;
+  padding: 0 4px;
+}
+
+/* 分析过程容器 */
+.analysis-process {
+  margin-top: 14px;
+  padding: 16px;
+  background: #fbfcfe;
+  border: 1px solid #eef2f7;
+  border-radius: 8px;
+}
+
+.analysis-stage-bar {
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px dashed #e8ecf2;
+}
+
+.analysis-section-title {
+  display: flex;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+/* 问题拆解 */
+.analysis-decomposition {
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px dashed #e8ecf2;
+}
+
+.analysis-goal {
+  background: #f3f0fb;
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+
+.analysis-subtask-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.analysis-subtask-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: #ffffff;
+  border: 1px solid #eef2f7;
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+
+.analysis-subtask-index {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #f3f0fb;
+  color: #722ed1;
+  font-size: 11px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+}
+
+.analysis-subtask-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.analysis-subtask-name {
+  display: flex;
+  align-items: center;
+  margin-bottom: 2px;
+}
+
+/* 执行计划步骤列表 */
+.analysis-step-list {
+  margin-top: 4px;
+}
+
+.analysis-step-collapse {
+  background: transparent;
+}
+
+.analysis-step-collapse .ant-collapse-item {
+  background: #ffffff;
+  border: 1px solid #eef2f7 !important;
+  border-radius: 6px !important;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+
+.analysis-step-collapse .ant-collapse-header {
+  padding: 10px 12px !important;
+  align-items: flex-start !important;
+}
+
+.analysis-step-collapse .ant-collapse-content-box {
+  padding: 12px !important;
+  background: #fcfdff;
+}
+
+.analysis-step-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+}
+
+.analysis-step-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  min-width: 18px;
+}
+
+.analysis-step-title-group {
+  flex: 1;
+  min-width: 0;
+}
+
+.analysis-step-name-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.analysis-step-desc {
+  margin-top: 2px;
+}
+
+.analysis-step-tags {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.analysis-step-tags .ant-tag {
+  margin-inline-end: 0;
+}
+
+.analysis-step-body {
+  padding-left: 4px;
+}
+
+.analysis-step-running-hint {
+  display: flex;
+  align-items: center;
+  padding: 6px 0 10px;
+}
+
+/* 重试记录：重写 SQL 的过程对排查很有价值，单独展示 */
+.analysis-step-retries {
+  margin-bottom: 12px;
+}
+
+.analysis-step-retry-item {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 10px;
+  background: #fffbf0;
+  border: 1px solid #ffe7ba;
+  border-radius: 6px;
+  margin-bottom: 6px;
+}
+
+.analysis-step-retry-error {
+  flex-basis: 100%;
+  margin-top: 2px;
+}
+
+.analysis-step-retry-error-text {
+  font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+  font-size: 11.5px;
+  color: #a8071a;
+  word-break: break-all;
+}
+
+.analysis-step-result-title {
+  margin-bottom: 8px;
+}
+
+/* 归因报告 */
+.analysis-report-header {
+  justify-content: space-between;
+}
+
+.analysis-report-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.analysis-report-card {
+  background: #ffffff;
+  border: 1px solid #e8ecf2;
+  border-radius: 10px;
+  padding: 18px 20px 8px;
+}
+
+.analysis-report-title {
+  padding-bottom: 12px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid #f0f2f5;
+}
+
+.analysis-report-section {
+  padding: 14px 0;
+  border-bottom: 1px solid #f6f8fa;
+}
+
+.analysis-report-section:last-child {
+  border-bottom: none;
+}
+
+/* 归因分析结论是核心产出，单独强调 */
+.analysis-report-section.is-highlight {
+  background: #fff8f7;
+  border-radius: 8px;
+  padding: 14px 14px;
+  margin: 4px 0;
+  border-bottom: none;
+}
+
+.analysis-report-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #595959;
+  margin-bottom: 8px;
+}
+
+.analysis-report-section-body {
+  padding-left: 2px;
+}
+
+.analysis-bullet-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.analysis-bullet-list li {
+  position: relative;
+  padding: 3px 0 3px 12px;
+  border-left: 2px solid #d9d9d9;
+  margin-bottom: 6px;
+  font-size: 13px;
+  line-height: 1.65;
+  color: #262626;
+}
+
+.analysis-bullet-list li:last-child {
+  margin-bottom: 0;
+}
+
+.analysis-report-pending {
+  padding: 24px 0;
+  background: #fafbfc;
+  border: 1px dashed #e8ecf2;
+  border-radius: 8px;
+}
