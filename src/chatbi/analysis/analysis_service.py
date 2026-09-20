@@ -172,6 +172,9 @@ class AnalysisService:
             chatbi_run_options=run_options,
             failure_policy="skip",
             max_retries=2,
+            # 把请求者的身份传下去：行级过滤与脱敏都在 DatabaseClient 里按身份执行，
+            # 不传的话子步骤会以 demo_admin（admin）身份跑完整条归因链路。
+            security_context=user_context,
         )
         step_results: list[StepExecutionResult] = []
         results_by_step: dict[str, StepExecutionResult] = {}

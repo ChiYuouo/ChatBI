@@ -6,6 +6,7 @@
 from types import SimpleNamespace
 
 from chatbi.analysis.analysis_service import AnalysisService
+from chatbi.core.security import UserContext
 
 
 class FakeLLM:
@@ -213,3 +214,56 @@ def test_step_done_payload_exposes_fields_frontend_depends_on():
 
     for field in ("step_id", "step_name", "status", "success", "rows", "columns"):
         assert field in done, f"step_done 缺少字段 {field}"
+
+
+# ==================== 归因链路的权限传递 ====================
+
+
+def _build_recording_service(captured_users):
+    """构造一个能记录每个子步骤所用身份的 AnalysisService。"""
+
+    class RecordingDB(FakeDB):
+        def execute(self, sql, user=None):
+            captured_users.append(user)
+            return super().execute(sql, user)
+
+    def recording_factory(app_config, source_id=None):
+        runtime = build_fake_runtime_factory()(app_config, source_id=source_id)
+        runtime.db = RecordingDB()
+        return runtime
+
+    return AnalysisService(runtime_factory=recording_factory)
+
+
+def test_analysis_passes_user_context_to_substeps():
+    """归因链路的子步骤必须带着请求者身份执行。
+
+    曾经 security_context 在 analysis_service 里接收后从未使用，
+    子步骤全部以 demo_admin（admin）身份执行 ——
+    销售用户用归因分析就能绕过行级过滤，看到全部区域的数据。
+    """
+    captured_users: list[UserContext | None] = []
+    service = _build_recording_service(captured_users)
+
+    list(
+        service.run_stream_events(
+            "最近三个月利润为什么下降？",
+            security_context=UserContext(user_id="alice", role="sales", region="欧洲"),
+            chatbi_run_options=HERMETIC_RUN_OPTIONS,
+        )
+    )
+
+    assert captured_users, "归因链路至少应有一个子步骤执行过 SQL"
+    assert all(user is not None and user.user_id == "alice" for user in captured_users)
+    assert all(user.region == "欧洲" for user in captured_users)
+
+
+def test_analysis_without_security_context_falls_back_to_demo_admin():
+    """不传身份时维持原有行为（demo_admin），保证向后兼容。"""
+    captured_users: list[UserContext | None] = []
+    service = _build_recording_service(captured_users)
+
+    list(service.run_stream_events("最近三个月利润为什么下降？", chatbi_run_options=HERMETIC_RUN_OPTIONS))
+
+    assert captured_users
+    assert all(user is not None and user.user_id == "demo_admin" for user in captured_users)

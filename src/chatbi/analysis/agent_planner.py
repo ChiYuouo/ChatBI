@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 from chatbi.analysis.query_decomposer import DecompositionPlan, DecomposedTask, QueryDecomposer
 from chatbi.analysis.report_generator import ReportGenerator
 from chatbi.core.config import DB_CONFIG
+from chatbi.core.security import UserContext
 from chatbi.services.chatbi_service import ChatBISystem
 
 
@@ -337,6 +338,7 @@ class StepExecutor:
         storage_backend: Literal["memory", "temp_table"] = "memory",
         result_store: IntermediateResultStore | None = None,
         storage_connection_factory: Callable[[], Any] | None = None,
+        security_context: UserContext | None = None,
     ):
         self.system = chatbi_system
         self.chatbi_run_options = chatbi_run_options or {
@@ -344,6 +346,10 @@ class StepExecutor:
             "use_indicator_rag": True,
             "use_indicator_knowledge": True,
         }
+        # 归因链路的子步骤必须以发起请求的用户身份执行。
+        # 安全校验强制在 DatabaseClient.execute() 里，但身份要靠这里传下去 ——
+        # 不传的话子步骤会落到 demo_admin（admin，零限制），整条归因链路绕过隔离。
+        self.security_context = security_context
         self.step_runner = step_runner or self._run_with_chatbi
         # 记录是否为外部注入的自定义执行器。
         # 不能用 `self.step_runner is self._run_with_chatbi` 判断：
@@ -648,6 +654,7 @@ class StepExecutor:
         if event_sink is None:
             return self.system.run(
                 user_question=question,
+                security_context=self.security_context,
                 **self.chatbi_run_options,
             )
 
@@ -658,6 +665,7 @@ class StepExecutor:
 
         for event_type, data in self.system.run_stream_events(
             user_question=question,
+            security_context=self.security_context,
             **self.chatbi_run_options,
         ):
             if event_type == "sql_chunk":
