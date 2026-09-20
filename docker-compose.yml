@@ -50,6 +50,20 @@ services:
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
       LLM_MODEL: ${LLM_MODEL:-qwen3-max}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-v3}
+      # 登录 token 签名密钥；留空则后端退化为随机密钥（重启后需重新登录）
+      JWT_SECRET: ${JWT_SECRET:-}
+      # 会话历史参数（见 session_store.py）
+      SESSION_HISTORY_TURNS: ${SESSION_HISTORY_TURNS:-8}
+      SESSION_RETENTION_DAYS: ${SESSION_RETENTION_DAYS:-7}
+      SESSION_MAX_TURNS: ${SESSION_MAX_TURNS:-100}
+      # 功能开关：代码默认全关，在 .env 里显式声明要开的
+      FEATURE_FEW_SHOT: ${FEATURE_FEW_SHOT:-false}
+      FEATURE_RULES: ${FEATURE_RULES:-false}
+      FEATURE_GUARDS: ${FEATURE_GUARDS:-false}
+      FEATURE_INDICATOR_KNOWLEDGE: ${FEATURE_INDICATOR_KNOWLEDGE:-false}
+      FEATURE_SCHEMA_LINKING: ${FEATURE_SCHEMA_LINKING:-false}
+      FEATURE_INDICATOR_RAG: ${FEATURE_INDICATOR_RAG:-false}
+      FEATURE_QUERY_REWRITE: ${FEATURE_QUERY_REWRITE:-false}
       # 前端已经走 Nginx 同源反代，这里只是兜底放开直连调试
       CORS_ALLOWED_ORIGINS: http://localhost:8080,http://127.0.0.1:8080
       TZ: Asia/Shanghai

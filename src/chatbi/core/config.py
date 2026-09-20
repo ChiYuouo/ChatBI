@@ -66,13 +66,15 @@ APP_CONFIG = {
         "max_tokens": int(os.getenv("LLM_MAX_TOKENS", 4000)),
     },
     "features": {
-        "few_shot": os.getenv("FEATURE_FEW_SHOT", "true").lower() == "true",
-        "rules": os.getenv("FEATURE_RULES", "true").lower() == "true",
-        "guards": os.getenv("FEATURE_GUARDS", "true").lower() == "true",
-        "indicator_knowledge": os.getenv("FEATURE_INDICATOR_KNOWLEDGE", "true").lower() == "true",
+        # 代码默认全部关闭，开启一律通过 .env 显式声明（FEATURE_*），
+        # 让实际生效的能力一眼可见，避免「代码里悄悄开着什么」。
+        "few_shot": os.getenv("FEATURE_FEW_SHOT", "false").lower() == "true",
+        "rules": os.getenv("FEATURE_RULES", "false").lower() == "true",
+        "guards": os.getenv("FEATURE_GUARDS", "false").lower() == "true",
+        "indicator_knowledge": os.getenv("FEATURE_INDICATOR_KNOWLEDGE", "false").lower() == "true",
         "schema_linking": os.getenv("FEATURE_SCHEMA_LINKING", "false").lower() == "true",
         "indicator_rag": os.getenv("FEATURE_INDICATOR_RAG", "false").lower() == "true",
-        "query_rewrite": os.getenv("FEATURE_QUERY_REWRITE", "true").lower() == "true",
+        "query_rewrite": os.getenv("FEATURE_QUERY_REWRITE", "false").lower() == "true",
     },
 }
 

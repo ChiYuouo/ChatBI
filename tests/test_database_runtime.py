@@ -188,7 +188,19 @@ def test_chatbi_system_returns_granular_database_error_type_for_timeout():
     system.llm = FakeLLM()
     system.db = FakeDB()
 
-    result = system.run("查看最近 12 个月订单明细")
+    result = system.run(
+        "查看最近 12 个月订单明细",
+        # 全局功能开关默认值改为「全关 + .env 显式开启」后，
+        # 不带选项的测试会实际走 ChromaDB 检索与 embedding 调用 ——
+        # 测试必须显式关掉，保持与真实模型服务隔离。
+        use_few_shot=False,
+        use_rules=False,
+        use_guards=False,
+        use_indicator_knowledge=False,
+        use_schema_linking=False,
+        use_indicator_rag=False,
+        use_query_rewrite=False,
+    )
 
     assert result["success"] is False
     assert result["error_type"] == "database_query_timeout"

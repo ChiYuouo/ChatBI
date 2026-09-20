@@ -164,6 +164,16 @@ def test_chatbi_system_returns_security_error_type():
     result = system.run(
         "查看订单明细",
         security_context=UserContext(user_id="u_sales_east", role="sales", region="华东大区"),
+        # 全局功能开关默认值改为「全关 + .env 显式开启」后，
+        # 不带选项的测试会实际走 ChromaDB 检索与 embedding 调用 ——
+        # 测试必须显式关掉，保持与真实模型服务隔离。
+        use_few_shot=False,
+        use_rules=False,
+        use_guards=False,
+        use_indicator_knowledge=False,
+        use_schema_linking=False,
+        use_indicator_rag=False,
+        use_query_rewrite=False,
     )
 
     assert result["success"] is False
