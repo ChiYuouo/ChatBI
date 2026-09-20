@@ -24,7 +24,11 @@ from pathlib import Path
 logger = logging.getLogger("chatbi.session")
 
 DEFAULT_DB_PATH = "data/sessions.db"
-DEFAULT_HISTORY_TURNS = 3
+
+# 每次回灌给模型的最近轮数。
+# 实测每轮约 170 字符，8 轮约 1.4K 字符（Prompt 总量的两成上下），
+# 对上下文窗口没有压力；再长就该考虑摘要压缩而不是继续加轮数。
+DEFAULT_HISTORY_TURNS = 8
 
 # 清理策略：超过 N 天的记录删除；单会话最多保留 M 轮。
 # 两者都可通过环境变量覆盖。
@@ -83,12 +87,16 @@ class SessionStore:
     def __init__(
         self,
         db_path: str | None = None,
-        history_turns: int = DEFAULT_HISTORY_TURNS,
+        history_turns: int | None = None,
         retention_days: int | None = None,
         max_turns_per_session: int | None = None,
     ):
         self.db_path = db_path or os.getenv("SESSION_DB_PATH", DEFAULT_DB_PATH)
-        self.history_turns = history_turns
+        self.history_turns = (
+            history_turns
+            if history_turns is not None
+            else _env_int("SESSION_HISTORY_TURNS", DEFAULT_HISTORY_TURNS)
+        )
         self.retention_days = (
             retention_days
             if retention_days is not None

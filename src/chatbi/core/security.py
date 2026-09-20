@@ -9,6 +9,16 @@ class SecurityError(Exception):
     """权限校验或 SQL 安全检查失败。"""
 
 
+# 表名后如果出现这些词，它们是 SQL 子句关键字，而不是表别名。
+# 例如 `FROM dim_customers GROUP BY region` 里的 GROUP —— 正则若把它
+# 当成别名，行级过滤会生成 `GROUP.region = '...'` 这种非法 SQL。
+_SQL_CLAUSE_KEYWORDS = frozenset({
+    "where", "group", "order", "having", "limit", "offset",
+    "join", "left", "right", "inner", "outer", "full", "cross",
+    "on", "using", "union", "set", "values", "as", "select", "from",
+})
+
+
 @dataclass(slots=True)
 class UserContext:
     """当前请求的最小权限上下文。"""
@@ -164,6 +174,10 @@ class QuerySecurityManager:
         )
         match = pattern.search(sql)
         alias = match.group(1) if match else None
+        # 没写别名时，表名后跟的往往是 GROUP / ORDER / WHERE 等子句关键字，
+        # 它们会被上面的可选分组误捕获成别名 —— 这里识别出来并退回用表名。
+        if alias and alias.lower() in _SQL_CLAUSE_KEYWORDS:
+            return table_name
         return alias or table_name
 
     def _append_predicate(self, sql: str, predicate: str) -> str:

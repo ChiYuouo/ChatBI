@@ -192,6 +192,29 @@ def test_store_reads_limits_from_env(monkeypatch):
     assert store.retention_days == 5
 
 
+def test_store_default_history_window_is_eight():
+    store = SessionStore(os.path.join(tempfile.mkdtemp(), "sessions.db"))
+
+    assert store.history_turns == 8
+
+
+def test_store_reads_history_turns_from_env(monkeypatch):
+    monkeypatch.setenv("SESSION_HISTORY_TURNS", "12")
+
+    store = SessionStore(os.path.join(tempfile.mkdtemp(), "sessions.db"))
+
+    assert store.history_turns == 12
+
+
+def test_store_history_turns_argument_beats_env(monkeypatch):
+    """显式传参优先于环境变量。"""
+    monkeypatch.setenv("SESSION_HISTORY_TURNS", "12")
+
+    store = SessionStore(os.path.join(tempfile.mkdtemp(), "sessions.db"), history_turns=2)
+
+    assert store.history_turns == 2
+
+
 def test_store_falls_back_on_invalid_env(monkeypatch):
     monkeypatch.setenv("SESSION_MAX_TURNS", "not-a-number")
 

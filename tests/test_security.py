@@ -65,6 +65,47 @@ def test_security_manager_injects_region_filter_for_sales_role():
     assert secured_sql.upper().count("WHERE") == 1
 
 
+def test_security_manager_qualifier_falls_back_when_table_has_no_alias():
+    """回归：表名后紧跟 GROUP BY 时，GROUP 不能被误当成表别名。
+
+    曾经 `FROM dim_customers GROUP BY region` 会生成
+    `WHERE GROUP.region = '华东大区'` —— 非法 SQL，销售角色查询直接失败。
+    既有测试用的都是带别名的 SQL，所以一直没暴露。
+    """
+    manager = QuerySecurityManager()
+    user = UserContext(user_id="u_sales_east", role="sales", region="华东大区")
+
+    secured_sql = manager.secure_sql(
+        "SELECT region, COUNT(*) FROM dim_customers GROUP BY region ORDER BY region;",
+        user,
+    )
+
+    assert "dim_customers.region = '华东大区'" in secured_sql
+    assert "GROUP.region" not in secured_sql
+    assert "ORDER.region" not in secured_sql
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT region FROM dim_customers ORDER BY region;",
+        "SELECT region FROM dim_customers LIMIT 10;",
+        "SELECT region FROM dim_customers WHERE level = 1;",
+    ],
+    ids=["order_by", "limit", "where"],
+)
+def test_security_manager_qualifier_handles_clause_keywords(sql):
+    """未写别名时，表名后的子句关键字不应被当作别名。"""
+    manager = QuerySecurityManager()
+    user = UserContext(user_id="u_sales_east", role="sales", region="华东大区")
+
+    secured_sql = manager.secure_sql(sql, user)
+
+    assert "dim_customers.region = '华东大区'" in secured_sql
+    for keyword in ("ORDER", "LIMIT", "WHERE"):
+        assert f"{keyword}.region" not in secured_sql
+
+
 def test_security_manager_masks_sensitive_columns_for_sales_role():
     manager = QuerySecurityManager()
     user = UserContext(user_id="u_sales_east", role="sales", region="华东大区")
