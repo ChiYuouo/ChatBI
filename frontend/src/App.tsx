@@ -3,6 +3,7 @@ import { ConfigProvider, App as AntdApp, theme, message } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { XProvider } from '@ant-design/x';
 import { Header } from './components/Header';
+import { LoginPage } from './components/LoginPage';
 import { QueryInputBar } from './components/QueryInputBar';
 import { QueryCard } from './components/QueryCard';
 import { AnalysisCard } from './components/AnalysisCard';
@@ -17,9 +18,11 @@ import {
 } from './types/chatbi';
 import {
   clearSessionHistory,
+  clearToken,
   executeAnalyzeStream,
   executeStreamQuery,
   fetchHealth,
+  getToken,
   peekSessionId,
   resetSessionId,
 } from './services/chatbiApi';
@@ -132,7 +135,14 @@ export function clearPersistedFeed(): void {
   }
 }
 
-export const MainContent: React.FC = () => {
+interface MainContentProps {
+  /** token 失效（后端 401）后回到登录页 */
+  onUnauthorized: () => void;
+  /** 退出登录 */
+  onLogout: () => void;
+}
+
+export const MainContent: React.FC<MainContentProps> = ({ onUnauthorized, onLogout }) => {
   const [inputQuestion, setInputQuestion] = useState('');
   const [mode, setMode] = useState<QueryMode>('query');
   const [loading, setLoading] = useState(false);
@@ -276,6 +286,11 @@ export const MainContent: React.FC = () => {
             );
           },
           onError: (errMsg, errorType) => {
+            // 401 时 authedFetch 已清 token —— 据此回到登录页
+            if (!getToken()) {
+              onUnauthorized();
+              return;
+            }
             setFeed((prev) =>
               prev.map((item) =>
                 item.kind === 'query' && item.record.id === queryId
@@ -463,14 +478,19 @@ export const MainContent: React.FC = () => {
               totalDurationMs: Math.round(performance.now() - startedAt),
             })),
 
-          onError: (errMsg, errorType) =>
+          onError: (errMsg, errorType) => {
+            if (!getToken()) {
+              onUnauthorized();
+              return;
+            }
             patchAnalysis(analysisId, (r) => ({
               ...r,
               status: 'error',
               error: errMsg,
               errorType: errorType || 'analysis',
               totalDurationMs: Math.round(performance.now() - startedAt),
-            })),
+            }));
+          },
         },
         { signal: abortCtrl.signal }
       );
@@ -564,6 +584,7 @@ export const MainContent: React.FC = () => {
         onRefreshHealth={loadHealth}
         historyCount={feed.length}
         onNewSession={handleNewSession}
+        onLogout={onLogout}
       />
 
       <main className="chatbi-main-container">
@@ -608,6 +629,27 @@ export const MainContent: React.FC = () => {
   );
 };
 
+/** 登录门控：未登录只显示登录页，登录后进入工作台 */
+const AuthGate: React.FC = () => {
+  const [authed, setAuthed] = useState(() => !!getToken());
+
+  if (!authed) {
+    return <LoginPage onLogin={() => setAuthed(true)} />;
+  }
+
+  return (
+    <MainContent
+      onUnauthorized={() => setAuthed(false)}
+      onLogout={() => {
+        // 退出同时清掉会话标识与对话记录，换账号后从新开始
+        clearToken();
+        clearPersistedFeed();
+        setAuthed(false);
+      }}
+    />
+  );
+};
+
 export default function App() {
   return (
     <ConfigProvider
@@ -623,7 +665,7 @@ export default function App() {
     >
       <XProvider>
         <AntdApp>
-          <MainContent />
+          <AuthGate />
         </AntdApp>
       </XProvider>
     </ConfigProvider>

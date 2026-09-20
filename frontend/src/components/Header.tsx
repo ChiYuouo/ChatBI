@@ -6,6 +6,7 @@ import {
   CloseCircleOutlined,
   LoadingOutlined,
   PlusOutlined,
+  LogoutOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
 import { HealthState } from '../types/chatbi';
@@ -18,6 +19,8 @@ interface HeaderProps {
   historyCount: number;
   /** 开启新会话：清空展示的同时重置会话标识，让后端上下文也从头开始 */
   onNewSession: () => void;
+  /** 退出登录 */
+  onLogout: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -25,6 +28,7 @@ export const Header: React.FC<HeaderProps> = ({
   onRefreshHealth,
   historyCount,
   onNewSession,
+  onLogout,
 }) => {
   const getHealthBadge = () => {
     if (health.status === 'checking') {
@@ -93,6 +97,17 @@ export const Header: React.FC<HeaderProps> = ({
             style={{ color: '#8c8c8c' }}
           >
             新会话
+          </Button>
+        </Tooltip>
+        <Tooltip title="退出登录">
+          <Button
+            type="text"
+            size="small"
+            icon={<LogoutOutlined />}
+            onClick={onLogout}
+            style={{ color: '#8c8c8c' }}
+          >
+            退出
           </Button>
         </Tooltip>
       </Space>

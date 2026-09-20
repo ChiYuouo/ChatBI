@@ -77,6 +77,74 @@ async function readErrorMessage(response: Response): Promise<string> {
   return parsedMsg;
 }
 
+/* ==================== 登录与 token ==================== */
+
+const TOKEN_KEY = 'chatbi_token';
+
+export interface LoginResult {
+  token: string;
+  user: { user_id: string; username: string; role: string; region: string | null };
+}
+
+/** 登录已过期（后端 401），token 已被清除，需要回到登录页 */
+export class UnauthorizedError extends Error {
+  constructor() {
+    super('登录已过期，请重新登录');
+  }
+}
+
+export function getToken(): string | null {
+  try {
+    return sessionStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function saveToken(token: string): void {
+  try {
+    sessionStorage.setItem(TOKEN_KEY, token);
+  } catch {
+    /* storage 不可用时本页内仍可使用 */
+  }
+}
+
+export function clearToken(): void {
+  try {
+    sessionStorage.removeItem(TOKEN_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+export async function login(username: string, password: string): Promise<LoginResult> {
+  const apiBase = getApiBaseUrl();
+  const response = await fetch(`${apiBase}/api/v1/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  return response.json();
+}
+
+/** 带登录态的 fetch：自动附 Authorization；401 时清 token 并抛 UnauthorizedError */
+async function authedFetch(url: string, options: RequestInit = {}): Promise<Response> {
+  const token = getToken();
+  const headers = new Headers(options.headers);
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+  const response = await fetch(url, { ...options, headers });
+  if (response.status === 401) {
+    clearToken();
+    throw new UnauthorizedError();
+  }
+  return response;
+}
+
 /* ==================== 会话标识 ==================== */
 
 const SESSION_STORAGE_KEY = 'chatbi_session_id';
@@ -147,7 +215,7 @@ export function peekSessionId(): string | null {
 export async function clearSessionHistory(sessionId: string): Promise<number> {
   const apiBase = getApiBaseUrl();
   try {
-    const response = await fetch(
+    const response = await authedFetch(
       `${apiBase}/api/v1/session/${encodeURIComponent(sessionId)}`,
       { method: 'DELETE' }
     );
@@ -170,7 +238,7 @@ export async function executeStreamQuery(
   let fullSql = '';
 
   try {
-    const response = await fetch(`${apiBase}/api/v1/query/stream`, {
+    const response = await authedFetch(`${apiBase}/api/v1/query/stream`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -271,7 +339,7 @@ export async function executeAnalyzeStream(
   const apiBase = getApiBaseUrl();
 
   try {
-    const response = await fetch(`${apiBase}/api/v1/analyze/stream`, {
+    const response = await authedFetch(`${apiBase}/api/v1/analyze/stream`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
