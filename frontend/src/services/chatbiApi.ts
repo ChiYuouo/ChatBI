@@ -249,7 +249,72 @@ export interface SessionSummary {
 export interface SessionTurn {
   question: string;
   sql: string | null;
+  /** 归因分析轮次才有值：归因报告 markdown 全文；普通查询为 null */
+  answer: string | null;
   created_at: string | null;
+}
+
+/**
+ * 把归因报告 markdown 反向解析为结构化报告，供 AnalysisReportView 复用。
+ * markdown 由后端 _render_markdown 按固定模板生成
+ * （# 标题 / ## 段名 / - 要点 / 纯文本段落），解析因此可靠；
+ * 格式不符时降级为把原文放进执行摘要，保证内容不丢。
+ */
+export function parseReportMarkdown(markdown: string): AnalysisReport {
+  const report: AnalysisReport = {
+    title: '归因分析报告',
+    executive_summary: '',
+    key_findings: [],
+    root_causes: [],
+    trend_judgment: '',
+    action_suggestions: [],
+    markdown,
+  };
+  try {
+    let section = '';
+    for (const line of markdown.split(/\r?\n/)) {
+      if (line.startsWith('# ') && !line.startsWith('## ')) {
+        report.title = line.slice(2).trim() || report.title;
+        continue;
+      }
+      if (line.startsWith('## ')) {
+        section = line.slice(3).trim();
+        continue;
+      }
+      const text = line.trim();
+      if (!text) continue;
+      const bullet = text.startsWith('- ') ? text.slice(2).trim() : null;
+      switch (section) {
+        case '执行摘要':
+          report.executive_summary = `${report.executive_summary}${report.executive_summary ? '\n' : ''}${text}`;
+          break;
+        case '关键发现':
+          if (bullet) report.key_findings.push(bullet);
+          break;
+        case '归因分析':
+          if (bullet) report.root_causes.push(bullet);
+          break;
+        case '趋势判断':
+          report.trend_judgment = `${report.trend_judgment}${report.trend_judgment ? '\n' : ''}${text}`;
+          break;
+        case '行动建议':
+          if (bullet) report.action_suggestions.push(bullet);
+          break;
+      }
+    }
+  } catch {
+    report.executive_summary = markdown;
+  }
+  // 段名对不上（如历史版本的报告）时兜底展示原文
+  if (
+    !report.executive_summary &&
+    !report.key_findings.length &&
+    !report.root_causes.length &&
+    markdown.trim()
+  ) {
+    report.executive_summary = markdown;
+  }
+  return report;
 }
 
 /** 当前登录用户的全部会话，按最后活动倒序 */
@@ -399,6 +464,8 @@ export async function executeAnalyzeStream(
       },
       body: JSON.stringify({
         question,
+        // 归因结果也要进会话历史（后端完成后落一条：问题 + 关键 SQL + 结论）
+        session_id: getOrCreateSessionId(),
         ...(options?.maxSteps ? { max_steps: options.maxSteps } : {}),
       }),
       signal: options?.signal,

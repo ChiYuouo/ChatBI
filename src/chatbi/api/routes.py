@@ -184,13 +184,22 @@ def list_sessions(request: Request) -> dict:
 
 @router.get("/api/v1/session/{session_id}/turns", tags=["查询"], summary="取某会话的全部轮次")
 def get_session_turns(session_id: str, request: Request) -> dict:
-    """切换会话时回填历史对话用；只含问题与 SQL，不含结果行。"""
+    """切换会话时回填历史对话用；只含问题与 SQL，不含结果行。
+
+    answer_text 仅归因分析轮次有值（归因报告 markdown），
+    普通查询轮次为 null。
+    """
     user_context = _build_user_context(request)
     turns = system.session_store.get_turns(session_id, user_context.user_id)
     return {
         "session_id": session_id,
         "turns": [
-            {"question": t.question, "sql": t.sql, "created_at": t.created_at}
+            {
+                "question": t.question,
+                "sql": t.sql,
+                "answer": t.answer,
+                "created_at": t.created_at,
+            }
             for t in turns
         ],
     }
@@ -238,6 +247,7 @@ async def analyze_chatbi_stream(payload: AnalyzeRequest, request: Request) -> St
     def event_generator():
         for event_type, data in analysis_service.run_stream_events(
             user_question=payload.question,
+            session_id=payload.session_id,
             max_steps=payload.max_steps,
             source_id=payload.source_id,
             security_context=user_context,

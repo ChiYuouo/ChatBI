@@ -57,6 +57,7 @@ class AnalysisService:
         summarizer: ResultSummarizer | None = None,
         report_generator: ReportGenerator | None = None,
         runtime_factory=build_runtime,
+        session_store: Any | None = None,
     ):
         # 拆解器与报告生成器最终都复用 runtime 里的 LLM（见 _bind_llm），
         # 因此这里用占位实现，避免构造时白建两个真实 LLMClient。
@@ -70,6 +71,9 @@ class AnalysisService:
             text_generator=_unbound_text_generator,
         )
         self.runtime_factory = runtime_factory
+        # 会话存储：传入后，带 session_id 的归因请求会在完成时写入一轮记录。
+        # None 时跳过保存（测试与直接调用场景兼容）。
+        self.session_store = session_store
 
     def _bind_llm(self, runtime: Any) -> None:
         """把链路各阶段的 LLM 客户端统一绑定到当前 runtime 的实例上。
@@ -104,6 +108,7 @@ class AnalysisService:
         source_id: str | None = None,
         security_context: UserContext | None = None,
         chatbi_run_options: dict[str, Any] | None = None,
+        session_id: str | None = None,
     ) -> Generator[tuple[str, dict[str, Any]], None, None]:
         """流式执行完整归因链路，产出 (事件类型, 事件数据) 二元组。
 
@@ -116,6 +121,10 @@ class AnalysisService:
         - report_start / report_done: 归因报告
         - error: 链路异常
         - done: 链路结束
+
+        session_id 的语义与单跳查询不同：只用于**完成后落一条记录**，
+        不会透传给各子步骤 —— 子步骤的问题是机器生成的中间产物，
+        逐条落库会污染会话历史与后续提问改写。
         """
         question = (user_question or "").strip()
         if not question:
@@ -215,6 +224,18 @@ class AnalysisService:
             summary=summary.model_dump(),
         )
         yield "report_done", report.model_dump()
+
+        # 6. 会话落库
+        # 只存原始问题 + 报告结论：子步骤 SQL 属于中间产物，逐条落库冗余，
+        # 挑"关键 SQL"也没有稳定标准；归因卡片前端只渲染报告。
+        # append_turn 内部自带失败兜底，不影响归因结果返回。
+        if session_id and self.session_store is not None:
+            self.session_store.append_turn(
+                session_id=session_id,
+                user_id=user_context.user_id,
+                question=question,
+                answer=report.markdown or None,
+            )
 
         yield "done", {
             "question": question,

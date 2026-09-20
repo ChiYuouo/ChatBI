@@ -473,3 +473,67 @@ def test_get_turns_does_not_cross_users():
     store.append_turn("sA", "u1", "u1 的问题", FAKE_SQL)
 
     assert store.get_turns("sA", "u2") == []
+
+
+def test_append_turn_with_answer_roundtrip():
+    """归因分析落库：answer 写入后 get_turns / recent_turns 都能读回。"""
+    store = SessionStore(os.path.join(tempfile.mkdtemp(), "sessions.db"))
+
+    store.append_turn("sA", "u1", "最近三个月利润为什么下降？", FAKE_SQL, answer="# 归因报告\n欧洲区下滑是主因")
+    store.append_turn("sA", "u1", "普通追问", FAKE_SQL)
+
+    turns = store.get_turns("sA", "u1")
+    assert turns[0].answer and "归因报告" in turns[0].answer
+    # 普通查询轮次 answer 为 None
+    assert turns[1].answer is None
+
+
+def test_render_history_keeps_answer_summary_only():
+    """历史注入 Prompt 时，回答文本只取摘要，报告全文不能撑爆上下文。"""
+    store = SessionStore(os.path.join(tempfile.mkdtemp(), "sessions.db"))
+    long_answer = "结论" + "细节" * 2000  # 4000+ 字符，远超 400 字摘要上限
+
+    store.append_turn("sA", "u1", "利润为什么下降", FAKE_SQL, answer=long_answer)
+
+    history = store.render_history("sA", "u1")
+    assert "分析结论（摘要）" in history
+    # 全文被截断：完整内容不会出现在历史里
+    assert long_answer not in history
+
+
+def test_migration_adds_answer_text_column_idempotently():
+    """存量库升级：旧结构表（无 answer_text）初始化后自动补列，
+    旧数据保留，且重复初始化不报错。"""
+    import sqlite3
+
+    db_path = os.path.join(tempfile.mkdtemp(), "sessions.db")
+    # 手工造一个旧版本的表结构并写入一条数据
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE chat_turn ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " session_id TEXT NOT NULL, user_id TEXT NOT NULL,"
+        " question TEXT NOT NULL, sql_text TEXT,"
+        " created_at TEXT NOT NULL)"
+    )
+    conn.execute(
+        "INSERT INTO chat_turn (session_id, user_id, question, sql_text, created_at)"
+        " VALUES ('sOld', 'u1', '旧问题', 'SELECT 1',"
+        " datetime('now', 'localtime'))"  # 最近时间，避免被启动时的过期清理删除
+    )
+    conn.commit()
+    conn.close()
+
+    # 第一次初始化触发迁移，第二次验证幂等
+    store = SessionStore(db_path)
+    SessionStore(db_path)
+
+    turns = store.get_turns("sOld", "u1")
+    assert len(turns) == 1
+    assert turns[0].question == "旧问题"
+    assert turns[0].answer is None
+
+    # 迁移后的表支持写入 answer
+    store.append_turn("sOld", "u1", "新问题", FAKE_SQL, answer="新结论")
+    refreshed = store.get_turns("sOld", "u1")
+    assert refreshed[-1].answer == "新结论"

@@ -267,3 +267,60 @@ def test_analysis_without_security_context_falls_back_to_demo_admin():
 
     assert captured_users
     assert all(user is not None and user.user_id == "demo_admin" for user in captured_users)
+
+
+def test_analysis_service_persists_session_turn_when_session_id_given():
+    """带 session_id 的归因完成后，要作为一轮写入会话历史：
+    question=原始问题，answer=归因报告 markdown；sql 不落库（子步骤
+    SQL 是中间产物，冗余且无稳定挑选标准）。"""
+    import os
+    import tempfile
+
+    from chatbi.infrastructure.session_store import SessionStore
+
+    store = SessionStore(os.path.join(tempfile.mkdtemp(), "sessions.db"))
+    service = AnalysisService(
+        runtime_factory=build_fake_runtime_factory(),
+        session_store=store,
+    )
+
+    events = list(
+        service.run_stream_events(
+            "最近三个月利润为什么下降？",
+            chatbi_run_options=HERMETIC_RUN_OPTIONS,
+            session_id="sAnalyze",
+        )
+    )
+
+    assert events[-1][0] == "done"
+    turns = store.get_turns("sAnalyze", UserContext.demo_admin().user_id)
+    assert len(turns) == 1
+    turn = turns[0]
+    assert turn.question == "最近三个月利润为什么下降？"
+    assert turn.sql is None
+    assert turn.answer and "利润下降归因" in turn.answer
+
+
+def test_analysis_service_skips_persistence_without_session_id():
+    """不传 session_id 时行为与之前一致：不写任何会话记录。"""
+    import os
+    import tempfile
+
+    from chatbi.infrastructure.session_store import SessionStore
+
+    store = SessionStore(os.path.join(tempfile.mkdtemp(), "sessions.db"))
+    service = AnalysisService(
+        runtime_factory=build_fake_runtime_factory(),
+        session_store=store,
+    )
+
+    events = list(
+        service.run_stream_events(
+            "最近三个月利润为什么下降？",
+            chatbi_run_options=HERMETIC_RUN_OPTIONS,
+        )
+    )
+
+    assert events[-1][0] == "done"
+    # anonymous 名下也没有记录 —— 没有 session_id 就完全不触碰存储
+    assert store.get_turns(None, "anonymous") == []

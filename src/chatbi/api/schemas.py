@@ -40,6 +40,14 @@ class AnalyzeRequest(BaseModel):
         min_length=1,
         description="需要归因的业务问题，例如「最近三个月利润为什么下降」",
     )
+    session_id: str | None = Field(
+        default=None,
+        max_length=128,
+        description=(
+            "会话标识；传入后归因完成会作为一轮写入会话历史"
+            "（问题 + 关键 SQL + 归因结论），与会话内其他查询同流展示"
+        ),
+    )
     max_steps: int | None = Field(
         default=None,
         ge=1,

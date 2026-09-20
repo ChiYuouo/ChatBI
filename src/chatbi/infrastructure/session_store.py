@@ -52,15 +52,20 @@ def _env_int(name: str, default: int) -> int:
 
 # SQL 文本落库前的截断上限，防御异常长的模型输出
 _MAX_SQL_CHARS = 2000
+# 归因报告等回答文本的截断上限（报告 markdown 全文可能远超此长度）
+_MAX_ANSWER_CHARS = 8000
+# 注入 Prompt 的历史里，回答文本只取摘要，避免报告全文撑爆上下文
+_HISTORY_ANSWER_CHARS = 400
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS chat_turn (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id TEXT    NOT NULL,
-    user_id    TEXT    NOT NULL,
-    question   TEXT    NOT NULL,
-    sql_text   TEXT,
-    created_at TEXT    NOT NULL
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  TEXT    NOT NULL,
+    user_id     TEXT    NOT NULL,
+    question    TEXT    NOT NULL,
+    sql_text    TEXT,
+    answer_text TEXT,
+    created_at  TEXT    NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_chat_turn_lookup
@@ -75,6 +80,8 @@ class ConversationTurn:
     question: str
     sql: str | None = None
     created_at: str | None = None
+    # 归因分析等场景的回答文本（报告摘要/结论）；普通查询为 None
+    answer: str | None = None
 
 
 class SessionStore:
@@ -130,12 +137,25 @@ class SessionStore:
                 try:
                     with conn:
                         conn.executescript(_SCHEMA)
+                        self._migrate_schema(conn)
                     # WAL 让读写不互相阻塞，避免并发请求下读历史被写阻塞
                     conn.execute("PRAGMA journal_mode=WAL")
                 finally:
                     conn.close()
         except (sqlite3.Error, OSError) as exc:
             logger.warning("会话表初始化失败，多轮上下文不可用: %s", exc)
+
+    @staticmethod
+    def _migrate_schema(conn: sqlite3.Connection) -> None:
+        """存量库的增量迁移。CREATE TABLE IF NOT EXISTS 不会给已存在的表加列，
+        这里按列名逐一检查、缺失才 ALTER，保证可重复执行（幂等）。"""
+        existing = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(chat_turn)").fetchall()
+        }
+        if "answer_text" not in existing:
+            conn.execute("ALTER TABLE chat_turn ADD COLUMN answer_text TEXT")
+            logger.info("会话表已迁移：chat_turn 新增 answer_text 列")
 
     def _prune_expired(self, force: bool = False) -> None:
         """删除超过保留期的会话记录；失败只记日志。
@@ -178,8 +198,13 @@ class SessionStore:
         user_id: str | None,
         question: str,
         sql: str | None = None,
+        answer: str | None = None,
     ) -> None:
-        """追加一轮问答。失败只记日志，不抛出。"""
+        """追加一轮问答。失败只记日志，不抛出。
+
+        answer 用于归因分析等带结论文本的场景（如报告 markdown），
+        落库前截断到 _MAX_ANSWER_CHARS，防御异常长的模型输出。
+        """
         if not session_id:
             return
         owner = user_id or "anonymous"
@@ -190,13 +215,15 @@ class SessionStore:
                     with conn:
                         conn.execute(
                             "INSERT INTO chat_turn"
-                            " (session_id, user_id, question, sql_text, created_at)"
-                            " VALUES (?, ?, ?, ?, ?)",
+                            " (session_id, user_id, question, sql_text,"
+                            " answer_text, created_at)"
+                            " VALUES (?, ?, ?, ?, ?, ?)",
                             (
                                 session_id,
                                 owner,
                                 question,
                                 (sql or "")[:_MAX_SQL_CHARS] or None,
+                                (answer or "")[:_MAX_ANSWER_CHARS] or None,
                                 datetime.now().isoformat(timespec="seconds"),
                             ),
                         )
@@ -238,7 +265,7 @@ class SessionStore:
             conn = self._connect()
             try:
                 rows = conn.execute(
-                    "SELECT question, sql_text, created_at FROM chat_turn"
+                    "SELECT question, sql_text, answer_text, created_at FROM chat_turn"
                     " WHERE session_id = ? AND user_id = ?"
                     " ORDER BY id DESC LIMIT ?",
                     (session_id, user_id or "anonymous", resolved_limit),
@@ -253,6 +280,7 @@ class SessionStore:
                 question=row["question"],
                 sql=row["sql_text"],
                 created_at=row["created_at"],
+                answer=row["answer_text"],
             )
             for row in reversed(rows)
         ]
@@ -273,6 +301,10 @@ class SessionStore:
             lines.append(f"第{index}轮 用户问：{turn.question}")
             if turn.sql:
                 lines.append(f"      生成SQL：{turn.sql}")
+            # 归因报告等回答文本只注入摘要，报告全文会撑爆上下文
+            if turn.answer:
+                summary = turn.answer[:_HISTORY_ANSWER_CHARS].strip()
+                lines.append(f"      分析结论（摘要）：{summary}")
         return "\n".join(lines)
 
     def list_sessions(self, user_id: str | None) -> list[dict]:
@@ -327,7 +359,7 @@ class SessionStore:
             conn = self._connect()
             try:
                 rows = conn.execute(
-                    "SELECT question, sql_text, created_at FROM chat_turn"
+                    "SELECT question, sql_text, answer_text, created_at FROM chat_turn"
                     " WHERE session_id = ? AND user_id = ?"
                     " ORDER BY id ASC",
                     (session_id, user_id or "anonymous"),
@@ -342,6 +374,7 @@ class SessionStore:
                 question=row["question"],
                 sql=row["sql_text"],
                 created_at=row["created_at"],
+                answer=row["answer_text"],
             )
             for row in rows
         ]

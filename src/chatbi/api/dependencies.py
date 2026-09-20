@@ -16,7 +16,8 @@ system = ChatBISystem(app_config=APP_CONFIG)
 
 # 归因链路涉及多次 LLM 调用与多步 SQL，实例内只保留无状态编排器，
 # 真实的 runtime 与 LLM 客户端在每次请求时按需构建。
-analysis_service = AnalysisService()
+# 会话存储与单跳查询共用同一实例（内部有写锁，SQLite 连接按操作独立）。
+analysis_service = AnalysisService(session_store=system.session_store)
 
 
 def _rows_to_dicts(columns: list[str], results: list[tuple]) -> list[dict[str, Any]]:

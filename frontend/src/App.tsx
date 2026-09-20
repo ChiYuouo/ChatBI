@@ -24,6 +24,7 @@ import {
   executeStreamQuery,
   fetchHealth,
   fetchSessionTurns,
+  parseReportMarkdown,
   getToken,
   listSessions,
   peekSessionId,
@@ -597,19 +598,37 @@ export const MainContent: React.FC<MainContentProps> = ({ onUnauthorized, onLogo
       const turns = await fetchSessionTurns(sessionId);
       setActiveSessionId(sessionId);
       setActiveSessionIdState(sessionId);
-      // 接口按时间正序返回，feed 渲染最新在前 → 反转
+      // 接口按时间正序返回，feed 渲染最新在前 → 反转。
+      // 带回答文本的是归因轮次：还原成归因卡片渲染报告；普通查询照旧走查询卡片。
       const items: FeedItem[] = [...turns]
         .reverse()
-        .map((turn, index) => ({
-          kind: 'query' as const,
-          record: {
+        .map((turn, index): FeedItem => {
+          const base = {
             id: `history_${sessionId.slice(0, 8)}_${index}`,
             question: turn.question,
-            sql: turn.sql || '',
-            status: 'success' as const,
             createdAt: new Date(turn.created_at || Date.now()),
-          },
-        }));
+          };
+          if (turn.answer) {
+            return {
+              kind: 'analysis',
+              record: {
+                ...base,
+                status: 'success' as const,
+                // 历史记录没有步骤明细，空数组让过程区收起、只展示报告
+                steps: [],
+                report: parseReportMarkdown(turn.answer),
+              },
+            };
+          }
+          return {
+            kind: 'query',
+            record: {
+              ...base,
+              sql: turn.sql || '',
+              status: 'success' as const,
+            },
+          };
+        });
       setFeed(items);
       setInputQuestion('');
     },
