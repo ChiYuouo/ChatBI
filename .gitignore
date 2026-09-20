@@ -38,6 +38,9 @@ reports/
 # Local session store (SQLite, created at runtime)
 data/sessions.db*
 
+# Local user store (SQLite, contains password hashes)
+data/users.db*
+
 # OS files
 .DS_Store
 Thumbs.db

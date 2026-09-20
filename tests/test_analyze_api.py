@@ -7,10 +7,10 @@
 import json
 
 import pytest
-from fastapi.testclient import TestClient
 
 from chatbi.api import dependencies, routes
-from chatbi.api.app import app
+
+# client fixture 来自 tests/conftest.py（自带登录 token）
 
 
 def _parse_sse(raw: str) -> list[tuple[str, dict]]:
@@ -29,11 +29,6 @@ def _parse_sse(raw: str) -> list[tuple[str, dict]]:
         if event_type:
             events.append((event_type, data))
     return events
-
-
-@pytest.fixture()
-def client():
-    return TestClient(app)
 
 
 def test_analyze_stream_returns_sse_events(client, monkeypatch):

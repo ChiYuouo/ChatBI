@@ -10,6 +10,7 @@ dependencies = [
     "numpy>=2.5.2",
     "openai>=2.53.0",
     "pydantic>=2.13.4",
+    "pyjwt>=2.14.0",
     "pymysql>=1.2.0",
     "python-dotenv>=1.2.2",
     "uvicorn>=0.52.1",

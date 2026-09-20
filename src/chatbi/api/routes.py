@@ -20,9 +20,11 @@ from chatbi.api.schemas import (
     AnalyzeRequest,
     ErrorResponse,
     HealthResponse,
+    LoginRequest,
     QueryRequest,
     QuerySuccessResponse,
 )
+from chatbi.core.auth import UserStore, create_token
 from chatbi.core.config import APP_CONFIG
 from chatbi.core.security import UserContext
 
@@ -53,6 +55,38 @@ def health_check() -> HealthResponse:
     )
 
 
+_auth_store: UserStore | None = None
+
+
+def _get_auth_store() -> UserStore:
+    """懒加载用户存储：仅 import 本模块不应在工作区落下 users.db。"""
+    global _auth_store
+    if _auth_store is None:
+        _auth_store = UserStore()
+    return _auth_store
+
+
+@router.post("/api/v1/login", tags=["系统"], summary="登录")
+def login(payload: LoginRequest) -> dict:
+    """用户名密码换身份 token。
+
+    token 内含 user_id / role / region，之后所有请求凭它确定身份；
+    请求体自报身份的通道已删除。
+    """
+    user = _get_auth_store().authenticate(payload.username, payload.password)
+    if user is None:
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
+    return {
+        "token": create_token(user),
+        "user": {
+            "user_id": user.user_id,
+            "username": user.username,
+            "role": user.role,
+            "region": user.region,
+        },
+    }
+
+
 @router.post(
     "/api/v1/query",
     response_model=QuerySuccessResponse,
@@ -72,7 +106,7 @@ def query_chatbi(payload: QueryRequest, request: Request) -> QuerySuccessRespons
     """执行自然语言查询，并返回标准化结果。"""
     started_at = perf_counter()
     logger.info("Received question: %s", payload.question)
-    user_context = _build_user_context(request, payload)
+    user_context = _build_user_context(request)
     query_options = _resolve_query_options(payload, APP_CONFIG)
 
     result = system.run(
@@ -117,7 +151,7 @@ def query_chatbi(payload: QueryRequest, request: Request) -> QuerySuccessRespons
 async def query_chatbi_stream(payload: QueryRequest, request: Request) -> StreamingResponse:
     """执行自然语言查询，以 SSE 流式返回结果。"""
     logger.info("Stream request received: %s", payload.question)
-    user_context = _build_user_context(request, payload)
+    user_context = _build_user_context(request)
     query_options = _resolve_query_options(payload, APP_CONFIG)
 
     def event_generator():
@@ -176,7 +210,7 @@ async def analyze_chatbi_stream(payload: AnalyzeRequest, request: Request) -> St
     因此只提供流式接口，前端可实时看到每一步的进展。
     """
     logger.info("Analyze request received: %s", payload.question)
-    user_context = _build_user_context(request, payload)
+    user_context = _build_user_context(request)
     analyze_options = _resolve_analyze_options(payload, APP_CONFIG)
 
     def event_generator():

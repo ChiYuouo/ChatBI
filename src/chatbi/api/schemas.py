@@ -28,9 +28,8 @@ class QueryRequest(BaseModel):
         description="是否启用提问改写（仅在带 session_id 且已有历史时生效）",
     )
     source_id: str | None = Field(default=None, description="数据源标识；未传时使用系统默认数据源")
-    user_id: str | None = Field(default=None, description="用户 ID，可选；未传时优先走请求头")
-    user_role: str | None = Field(default=None, description="用户角色：admin / finance / sales")
-    user_region: str | None = Field(default=None, description="用户所属区域，行级权限过滤")
+    # 注意：这里刻意没有 user_id / user_role / user_region 字段。
+    # 身份只来自登录后签发的 token（中间件验签），请求体自报身份是伪造入口。
 
 
 class AnalyzeRequest(BaseModel):
@@ -51,9 +50,14 @@ class AnalyzeRequest(BaseModel):
     use_schema_linking: bool | None = Field(default=None, description="是否启用 Schema Linking")
     use_indicator_rag: bool | None = Field(default=None, description="是否启用指标 RAG")
     source_id: str | None = Field(default=None, description="数据源标识；未传时使用系统默认数据源")
-    user_id: str | None = Field(default=None, description="用户 ID，可选；未传时优先走请求头")
-    user_role: str | None = Field(default=None, description="用户角色：admin / finance / sales")
-    user_region: str | None = Field(default=None, description="用户所属区域，行级权限过滤")
+    # 与 QueryRequest 相同：身份只来自 token，不接受请求体自报
+
+
+class LoginRequest(BaseModel):
+    """登录请求体。"""
+
+    username: str = Field(..., min_length=1, description="用户名")
+    password: str = Field(..., min_length=1, description="密码")
 
 
 class HealthResponse(BaseModel):

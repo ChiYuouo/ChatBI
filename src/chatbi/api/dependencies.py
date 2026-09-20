@@ -3,9 +3,11 @@
 from typing import Any
 
 from fastapi import Request
+from fastapi.responses import JSONResponse
 
 from chatbi.analysis.analysis_service import AnalysisService
-from chatbi.api.schemas import AnalyzeRequest, QueryRequest
+from chatbi.api.schemas import AnalyzeRequest, ErrorResponse, QueryRequest
+from chatbi.core.auth import decode_token
 from chatbi.core.config import APP_CONFIG
 from chatbi.core.security import UserContext
 from chatbi.services.chatbi_service import ChatBISystem
@@ -22,16 +24,13 @@ def _rows_to_dicts(columns: list[str], results: list[tuple]) -> list[dict[str, A
     return [dict(zip(columns, row)) for row in results]
 
 
-def _build_user_context(
-    request: Request,
-    payload: QueryRequest | AnalyzeRequest,
-) -> UserContext:
-    state_context = getattr(request.state, "user_context", UserContext.demo_admin())
-    return UserContext(
-        user_id=payload.user_id or state_context.user_id,
-        role=payload.user_role or state_context.role,
-        region=payload.user_region or state_context.region,
-    )
+def _build_user_context(request: Request) -> UserContext:
+    """身份只来自 token（中间件验签后挂在 request.state 上）。
+
+    请求体里曾经允许的 user_id / user_role / user_region 自报字段已删除 ——
+    它们是伪造身份的入口，保留等于整个鉴权体系形同虚设。
+    """
+    return getattr(request.state, "user_context", UserContext.demo_admin())
 
 
 def _resolve_query_options(payload: QueryRequest, app_config: dict) -> dict[str, bool]:
@@ -90,11 +89,40 @@ def _resolve_analyze_options(payload: AnalyzeRequest, app_config: dict) -> dict[
     }
 
 
+# 无需登录即可访问的路径
+_PUBLIC_PATHS = frozenset({"/", "/health", "/api/v1/login"})
+# 文档类前缀（FastAPI 自带的 Swagger / OpenAPI）
+_PUBLIC_PREFIXES = ("/docs", "/openapi", "/redoc")
+
+
 async def attach_user_context(request: Request, call_next):
-    """把最小权限上下文挂到 request.state，供查询链路复用。"""
+    """解析 Bearer token，把用户身份挂到 request.state。
+
+    身份只来自 token —— 请求体/请求头里任何自报的字段都不再被读取。
+    白名单路径（登录、健康检查、文档）不要求 token，state 上挂
+    demo_admin 占位身份，仅供后续代码安全访问字段。
+    """
+    path = request.url.path
+    if path in _PUBLIC_PATHS or path.startswith(_PUBLIC_PREFIXES):
+        request.state.user_context = UserContext.demo_admin()
+        return await call_next(request)
+
+    auth_header = request.headers.get("authorization", "")
+    token = auth_header[7:].strip() if auth_header.lower().startswith("bearer ") else ""
+    user = decode_token(token)
+    if user is None:
+        return JSONResponse(
+            status_code=401,
+            content=ErrorResponse(
+                error="未登录或登录已过期",
+                error_type="unauthorized",
+                metadata={"path": path},
+            ).model_dump(),
+        )
+
     request.state.user_context = UserContext(
-        user_id=request.headers.get("x-user-id", "demo_admin"),
-        role=request.headers.get("x-user-role", "admin"),
-        region=request.headers.get("x-user-region"),
+        user_id=user.user_id,
+        role=user.role,
+        region=user.region,
     )
     return await call_next(request)

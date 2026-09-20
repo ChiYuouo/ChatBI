@@ -1,18 +1,13 @@
 """会话历史接口的测试。
 
 用假 SessionStore 替换真实存储，只验证路由与参数传递，不落任何数据库文件。
+client fixture 来自 tests/conftest.py（自带登录 token）。
 """
 
 import pytest
-from fastapi.testclient import TestClient
 
 from chatbi.api import routes
-from chatbi.api.app import app
-
-
-@pytest.fixture()
-def client():
-    return TestClient(app)
+from chatbi.core.auth import AuthUser, create_token
 
 
 class FakeSessionStore:
@@ -33,14 +28,20 @@ def test_clear_session_deletes_and_reports_count(client, monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == {"session_id": "abc-123", "deleted": 3}
-    assert fake.calls == [("abc-123", "demo_admin")]
+    # client fixture 携带的 token 身份是 test_admin
+    assert fake.calls == [("abc-123", "test_admin")]
 
 
 def test_clear_session_uses_request_user(client, monkeypatch):
-    """删除范围必须限定在发起请求的用户名下，不能跨用户误删。"""
+    """删除范围必须限定在发起请求的用户名下，不能跨用户误删。
+
+    身份来自登录 token —— 曾经的 x-user-id 请求头已不再是身份来源。
+    """
     fake = FakeSessionStore()
     monkeypatch.setattr(routes.system, "_session_store", fake)
 
-    client.delete("/api/v1/session/abc", headers={"x-user-id": "alice"})
+    user = AuthUser(user_id="alice", username="alice", role="sales", region="欧洲")
+    headers = {"Authorization": f"Bearer {create_token(user)}"}
+    client.delete("/api/v1/session/abc", headers=headers)
 
     assert fake.calls == [("abc", "alice")]
