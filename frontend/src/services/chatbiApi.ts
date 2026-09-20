@@ -227,6 +227,59 @@ export async function clearSessionHistory(sessionId: string): Promise<number> {
   }
 }
 
+/** 显式设置当前活跃会话（侧边栏切换时用） */
+export function setActiveSessionId(id: string): void {
+  try {
+    sessionStorage.setItem(SESSION_STORAGE_KEY, id);
+  } catch {
+    fallbackSessionId = id;
+  }
+}
+
+/* ==================== 会话列表（侧边栏） ==================== */
+
+export interface SessionSummary {
+  session_id: string;
+  title: string;
+  turns: number;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface SessionTurn {
+  question: string;
+  sql: string | null;
+  created_at: string | null;
+}
+
+/** 当前登录用户的全部会话，按最后活动倒序 */
+export async function listSessions(): Promise<SessionSummary[]> {
+  const apiBase = getApiBaseUrl();
+  try {
+    const response = await authedFetch(`${apiBase}/api/v1/sessions`);
+    if (!response.ok) return [];
+    const data = await response.json();
+    return data.sessions || [];
+  } catch {
+    return [];
+  }
+}
+
+/** 某会话的全部轮次（时间正序），用于切换会话时回填历史 */
+export async function fetchSessionTurns(sessionId: string): Promise<SessionTurn[]> {
+  const apiBase = getApiBaseUrl();
+  try {
+    const response = await authedFetch(
+      `${apiBase}/api/v1/session/${encodeURIComponent(sessionId)}/turns`
+    );
+    if (!response.ok) return [];
+    const data = await response.json();
+    return data.turns || [];
+  } catch {
+    return [];
+  }
+}
+
 export async function executeStreamQuery(
   question: string,
   callbacks: StreamCallbacks,

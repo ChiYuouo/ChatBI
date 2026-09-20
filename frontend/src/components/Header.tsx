@@ -5,7 +5,6 @@ import {
   CheckCircleOutlined,
   CloseCircleOutlined,
   LoadingOutlined,
-  PlusOutlined,
   LogoutOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
@@ -17,8 +16,6 @@ interface HeaderProps {
   health: HealthState;
   onRefreshHealth: () => void;
   historyCount: number;
-  /** 开启新会话：清空展示的同时重置会话标识，让后端上下文也从头开始 */
-  onNewSession: () => void;
   /** 退出登录 */
   onLogout: () => void;
 }
@@ -27,7 +24,6 @@ export const Header: React.FC<HeaderProps> = ({
   health,
   onRefreshHealth,
   historyCount,
-  onNewSession,
   onLogout,
 }) => {
   const getHealthBadge = () => {
@@ -88,17 +84,6 @@ export const Header: React.FC<HeaderProps> = ({
             {historyCount} 条记录
           </Text>
         )}
-        <Tooltip title="清空当前对话并开启新会话（后端上下文一并重置）">
-          <Button
-            type="text"
-            size="small"
-            icon={<PlusOutlined />}
-            onClick={onNewSession}
-            style={{ color: '#8c8c8c' }}
-          >
-            新会话
-          </Button>
-        </Tooltip>
         <Tooltip title="退出登录">
           <Button
             type="text"

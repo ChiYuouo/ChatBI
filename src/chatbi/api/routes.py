@@ -174,6 +174,28 @@ async def query_chatbi_stream(payload: QueryRequest, request: Request) -> Stream
     )
 
 
+@router.get("/api/v1/sessions", tags=["查询"], summary="列出当前用户的会话")
+def list_sessions(request: Request) -> dict:
+    """侧边栏数据源：当前登录用户的全部会话，按最后活动倒序。"""
+    user_context = _build_user_context(request)
+    sessions = system.session_store.list_sessions(user_context.user_id)
+    return {"sessions": sessions}
+
+
+@router.get("/api/v1/session/{session_id}/turns", tags=["查询"], summary="取某会话的全部轮次")
+def get_session_turns(session_id: str, request: Request) -> dict:
+    """切换会话时回填历史对话用；只含问题与 SQL，不含结果行。"""
+    user_context = _build_user_context(request)
+    turns = system.session_store.get_turns(session_id, user_context.user_id)
+    return {
+        "session_id": session_id,
+        "turns": [
+            {"question": t.question, "sql": t.sql, "created_at": t.created_at}
+            for t in turns
+        ],
+    }
+
+
 @router.delete(
     "/api/v1/session/{session_id}",
     tags=["查询"],

@@ -4,6 +4,7 @@ import zhCN from 'antd/locale/zh_CN';
 import { XProvider } from '@ant-design/x';
 import { Header } from './components/Header';
 import { LoginPage } from './components/LoginPage';
+import { SessionSidebar } from './components/SessionSidebar';
 import { QueryInputBar } from './components/QueryInputBar';
 import { QueryCard } from './components/QueryCard';
 import { AnalysisCard } from './components/AnalysisCard';
@@ -22,9 +23,13 @@ import {
   executeAnalyzeStream,
   executeStreamQuery,
   fetchHealth,
+  fetchSessionTurns,
   getToken,
+  listSessions,
   peekSessionId,
   resetSessionId,
+  setActiveSessionId,
+  SessionSummary,
 } from './services/chatbiApi';
 import './App.css';
 
@@ -147,6 +152,10 @@ export const MainContent: React.FC<MainContentProps> = ({ onUnauthorized, onLogo
   const [mode, setMode] = useState<QueryMode>('query');
   const [loading, setLoading] = useState(false);
   const [feed, setFeed] = useState<FeedItem[]>(loadPersistedFeed);
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [activeSessionId, setActiveSessionIdState] = useState<string | null>(() =>
+    peekSessionId()
+  );
   const [health, setHealth] = useState<HealthState>({
     status: 'checking',
     databaseConnected: false,
@@ -172,6 +181,15 @@ export const MainContent: React.FC<MainContentProps> = ({ onUnauthorized, onLogo
     const timer = setTimeout(() => persistFeed(feed), 300);
     return () => clearTimeout(timer);
   }, [feed]);
+
+  // 拉取当前登录用户的会话列表（侧边栏数据源）
+  const loadSessions = useCallback(async () => {
+    setSessions(await listSessions());
+  }, []);
+
+  useEffect(() => {
+    loadSessions();
+  }, [loadSessions]);
 
   /** 更新指定归因记录 */
   const patchAnalysis = useCallback(
@@ -266,6 +284,8 @@ export const MainContent: React.FC<MainContentProps> = ({ onUnauthorized, onLogo
             );
           },
           onResult: (data, totalDurationMs) => {
+            // 新一轮已落库 —— 刷新侧边栏的会话顺序与轮数
+            void loadSessions();
             setFeed((prev) =>
               prev.map((item) =>
                 item.kind === 'query' && item.record.id === queryId
@@ -555,19 +575,65 @@ export const MainContent: React.FC<MainContentProps> = ({ onUnauthorized, onLogo
   // 合并了原「清空记录」：只清展示、不重置会话会留下一个隐患 ——
   // 用户以为记录清了，后端其实还在用那些历史做上下文。
   const handleNewSession = () => {
-    // 先删掉服务端那段历史，再重置本地标识。
-    // 只换 ID 不删数据的话，旧查询记录会一直留在磁盘上。
-    const previousSessionId = peekSessionId();
-    if (previousSessionId) {
-      // 不 await：删除失败也不该拖住界面，本地重置照常进行
-      void clearSessionHistory(previousSessionId);
-    }
+    // 「新会话」只是离开当前对话 —— 会话原样保留在侧边栏里，
+    // 删除走列表项的删除按钮（带二次确认）。多会话并存是它的语义前提。
     resetSessionId();
     clearPersistedFeed();
     setFeed([]);
     setInputQuestion('');
+    setActiveSessionIdState(null);
     message.success('已开启新会话');
   };
+
+  /** 从侧边栏切换到某个历史会话：回填记录并切换上下文 */
+  const handleSelectSession = useCallback(
+    async (sessionId: string) => {
+      if (sessionId === peekSessionId()) return;
+      // 有查询正在跑就先取消 —— 否则结果会写进已切走的会话界面
+      if (loading && abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        setLoading(false);
+      }
+      const turns = await fetchSessionTurns(sessionId);
+      setActiveSessionId(sessionId);
+      setActiveSessionIdState(sessionId);
+      // 接口按时间正序返回，feed 渲染最新在前 → 反转
+      const items: FeedItem[] = [...turns]
+        .reverse()
+        .map((turn, index) => ({
+          kind: 'query' as const,
+          record: {
+            id: `history_${sessionId.slice(0, 8)}_${index}`,
+            question: turn.question,
+            sql: turn.sql || '',
+            status: 'success' as const,
+            createdAt: new Date(turn.created_at || Date.now()),
+          },
+        }));
+      setFeed(items);
+      setInputQuestion('');
+    },
+    [loading]
+  );
+
+  /** 删除某个历史会话；删的是当前会话时自动切到全新会话 */
+  const handleDeleteSession = useCallback(
+    async (sessionId: string) => {
+      await clearSessionHistory(sessionId);
+      await loadSessions();
+      if (sessionId === peekSessionId()) {
+        // 删的是当前会话：切到全新会话，避免界面还挂着已删记录
+        resetSessionId();
+        clearPersistedFeed();
+        setFeed([]);
+        setActiveSessionIdState(null);
+        message.success('已删除当前会话');
+      } else {
+        message.success('已删除会话');
+      }
+    },
+    [loadSessions]
+  );
 
   const isLatestRunning = (item: FeedItem, index: number) => {
     if (index !== 0 || !loading) return false;
@@ -583,11 +649,18 @@ export const MainContent: React.FC<MainContentProps> = ({ onUnauthorized, onLogo
         health={health}
         onRefreshHealth={loadHealth}
         historyCount={feed.length}
-        onNewSession={handleNewSession}
         onLogout={onLogout}
       />
 
-      <main className="chatbi-main-container">
+      <div className="chatbi-body">
+        <SessionSidebar
+          sessions={sessions}
+          activeSessionId={activeSessionId}
+          onSelect={handleSelectSession}
+          onDelete={handleDeleteSession}
+          onNewSession={handleNewSession}
+        />
+        <main className="chatbi-main-container">
         <QueryInputBar
           value={inputQuestion}
           onChange={setInputQuestion}
@@ -625,6 +698,7 @@ export const MainContent: React.FC<MainContentProps> = ({ onUnauthorized, onLogo
           )}
         </div>
       </main>
+      </div>
     </div>
   );
 };

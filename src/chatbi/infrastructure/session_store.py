@@ -74,6 +74,7 @@ class ConversationTurn:
 
     question: str
     sql: str | None = None
+    created_at: str | None = None
 
 
 class SessionStore:
@@ -237,7 +238,7 @@ class SessionStore:
             conn = self._connect()
             try:
                 rows = conn.execute(
-                    "SELECT question, sql_text FROM chat_turn"
+                    "SELECT question, sql_text, created_at FROM chat_turn"
                     " WHERE session_id = ? AND user_id = ?"
                     " ORDER BY id DESC LIMIT ?",
                     (session_id, user_id or "anonymous", resolved_limit),
@@ -248,7 +249,11 @@ class SessionStore:
             logger.warning("会话历史读取失败，本次按无历史处理: %s", exc)
             return []
         return [
-            ConversationTurn(question=row["question"], sql=row["sql_text"])
+            ConversationTurn(
+                question=row["question"],
+                sql=row["sql_text"],
+                created_at=row["created_at"],
+            )
             for row in reversed(rows)
         ]
 
@@ -269,6 +274,77 @@ class SessionStore:
             if turn.sql:
                 lines.append(f"      生成SQL：{turn.sql}")
         return "\n".join(lines)
+
+    def list_sessions(self, user_id: str | None) -> list[dict]:
+        """列出某用户的全部会话（聚合自轮次表），按最后活动倒序。
+
+        标题取该会话的第一个问题 —— 这是侧边栏里用户辨认对话的依据。
+        会话没有独立的元数据表：一张轮次表聚合即可，避免两处存储互相同步。
+        """
+        if not user_id:
+            return []
+        try:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT t.session_id,
+                           COUNT(*) AS turns,
+                           MIN(t.created_at) AS created_at,
+                           MAX(t.created_at) AS updated_at,
+                           (SELECT t2.question FROM chat_turn t2
+                            WHERE t2.session_id = t.session_id
+                              AND t2.user_id = t.user_id
+                            ORDER BY t2.id ASC LIMIT 1) AS title
+                    FROM chat_turn t
+                    WHERE t.user_id = ?
+                    GROUP BY t.session_id
+                    ORDER BY MAX(t.id) DESC
+                    """,
+                    (user_id,),
+                ).fetchall()
+            finally:
+                conn.close()
+        except (sqlite3.Error, OSError) as exc:
+            logger.warning("会话列表查询失败: %s", exc)
+            return []
+        return [
+            {
+                "session_id": row["session_id"],
+                "title": row["title"] or "(空会话)",
+                "turns": row["turns"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        ]
+
+    def get_turns(self, session_id: str | None, user_id: str | None) -> list[ConversationTurn]:
+        """取某会话的全部轮次（时间正序），用于前端回填历史对话。"""
+        if not session_id:
+            return []
+        try:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    "SELECT question, sql_text, created_at FROM chat_turn"
+                    " WHERE session_id = ? AND user_id = ?"
+                    " ORDER BY id ASC",
+                    (session_id, user_id or "anonymous"),
+                ).fetchall()
+            finally:
+                conn.close()
+        except (sqlite3.Error, OSError) as exc:
+            logger.warning("会话轮次查询失败: %s", exc)
+            return []
+        return [
+            ConversationTurn(
+                question=row["question"],
+                sql=row["sql_text"],
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]
 
     def delete_session(self, session_id: str | None, user_id: str | None) -> int:
         """删除某会话在某用户名下的全部记录，返回删除条数。

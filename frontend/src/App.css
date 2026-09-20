@@ -603,3 +603,80 @@ body {
   border-radius: 4px;
   line-height: 1.6;
 }
+
+/* ==================== 会话侧边栏 ==================== */
+
+.chatbi-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.session-sidebar {
+  width: 240px;
+  flex-shrink: 0;
+  border-right: 1px solid #e8ecf2;
+  background: #fafbfc;
+  padding: 12px 8px;
+  overflow-y: auto;
+}
+
+.session-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+
+.session-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  margin-bottom: 2px;
+}
+
+.session-item:hover {
+  background: #eef3fb;
+}
+
+.session-item.active {
+  background: #e6f0ff;
+}
+
+.session-item .session-icon {
+  color: #8c8c8c;
+  flex-shrink: 0;
+}
+
+.session-item.active .session-icon {
+  color: #1677ff;
+}
+
+.session-item-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.session-item-title {
+  font-size: 13px;
+  color: #1f1f1f;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-item-meta {
+  font-size: 11px;
+  color: #b0b7c3;
+  margin-top: 2px;
+}
+
+.session-empty {
+  text-align: center;
+  color: #b0b7c3;
+  font-size: 12px;
+  padding: 24px 8px;
+  line-height: 1.8;
+}

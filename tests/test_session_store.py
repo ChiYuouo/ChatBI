@@ -428,3 +428,48 @@ def test_query_request_session_id_is_optional():
 def test_query_request_rejects_overlong_session_id():
     with pytest.raises(ValidationError):
         QueryRequest(question="各区域收入是多少", session_id="x" * 129)
+
+
+# ==================== 会话列表与轮次回填（侧边栏） ====================
+
+
+def test_list_sessions_aggregates_by_session():
+    store = SessionStore(os.path.join(tempfile.mkdtemp(), "sessions.db"))
+    store.append_turn("sA", "u1", "第一个问题", FAKE_SQL)
+    store.append_turn("sA", "u1", "追问", FAKE_SQL)
+    store.append_turn("sB", "u1", "另一个会话", FAKE_SQL)
+
+    sessions = store.list_sessions("u1")
+
+    # 按最后活动倒序；标题取该会话的第一个问题
+    assert [s["session_id"] for s in sessions] == ["sB", "sA"]
+    session_a = next(s for s in sessions if s["session_id"] == "sA")
+    assert session_a["title"] == "第一个问题"
+    assert session_a["turns"] == 2
+
+
+def test_list_sessions_isolates_by_user():
+    store = SessionStore(os.path.join(tempfile.mkdtemp(), "sessions.db"))
+    store.append_turn("sA", "u1", "u1 的问题", FAKE_SQL)
+    store.append_turn("sC", "u2", "u2 的问题", FAKE_SQL)
+
+    assert [s["session_id"] for s in store.list_sessions("u1")] == ["sA"]
+    assert [s["session_id"] for s in store.list_sessions("u2")] == ["sC"]
+
+
+def test_get_turns_returns_all_turns_in_chronological_order():
+    store = SessionStore(os.path.join(tempfile.mkdtemp(), "sessions.db"))
+    store.append_turn("sA", "u1", "第一问", FAKE_SQL)
+    store.append_turn("sA", "u1", "第二问", FAKE_SQL)
+
+    turns = store.get_turns("sA", "u1")
+
+    assert [t.question for t in turns] == ["第一问", "第二问"]
+    assert all(t.created_at for t in turns)
+
+
+def test_get_turns_does_not_cross_users():
+    store = SessionStore(os.path.join(tempfile.mkdtemp(), "sessions.db"))
+    store.append_turn("sA", "u1", "u1 的问题", FAKE_SQL)
+
+    assert store.get_turns("sA", "u2") == []
