@@ -106,6 +106,30 @@ WHERE o.order_status = 'completed'
   AND o.order_date < CURDATE() + INTERVAL 1 DAY
 GROUP BY DATE_FORMAT(o.order_date, '%Y-%m-01')
 ORDER BY month;
+
+示例5：
+问题：对比每月毛利与当月费用（两个来源按月对齐）
+SQL：SELECT
+    COALESCE(g.month, e.month) AS month,
+    COALESCE(g.gross_profit, 0) AS gross_profit,
+    COALESCE(e.total_expense, 0) AS total_expense
+FROM (
+    SELECT DATE_FORMAT(o.order_date, '%Y-%m-01') AS month,
+           SUM(o.net_amount * r.rate_to_cny)
+             - SUM((p.material_cost + p.labor_cost) * o.quantity) AS gross_profit
+    FROM sales_orders o
+    JOIN dim_products p ON o.product_id = p.product_id
+    JOIN exchange_rates r ON o.order_date = r.rate_date AND o.currency = r.currency
+    WHERE o.order_status = 'completed'
+    GROUP BY DATE_FORMAT(o.order_date, '%Y-%m-01')
+) g
+LEFT JOIN (
+    SELECT DATE_FORMAT(expense_date, '%Y-%m-01') AS month,
+           SUM(rd_expense + selling_expense + admin_expense + finance_expense) AS total_expense
+    FROM finance_expenses
+    GROUP BY DATE_FORMAT(expense_date, '%Y-%m-01')
+) e ON g.month = e.month
+ORDER BY month;
 """
 
 
@@ -149,6 +173,13 @@ ERROR_GUARDS = """
   套一层并不会让非聚合列变合法。例如
   `SUM(a) - COALESCE(f.total, 0)` 会报 1055，必须写成 `SUM(a) - COALESCE(MAX(f.total), 0)`。
   若某个派生表已按同一个月度分组（每期仅一行），用 MAX() 或 SUM() 包裹即可，语义不变。
+- 方言合规（重要）：只能使用 MySQL 8 实际支持的语法。MySQL **不支持**
+  FULL OUTER JOIN（含 FULL JOIN）、EXCEPT、INTERSECT —— 这些在其他数据库合法，
+  在 MySQL 会直接报 1064 语法错误。需要按月/维度对齐合并两个结果集并保留
+  两侧所有行时，用以下等价写法：
+  ① A LEFT JOIN B ... UNION ... B LEFT JOIN A ... WHERE A.键 IS NULL（补集写法）；
+  ② 若不需要保留无匹配的行，直接用 LEFT JOIN 或 INNER JOIN + COALESCE 兜底。
+  你不确定某个语法 MySQL 是否支持时，一律退回到 JOIN + UNION 的基础组合。
 - 字段合法性：不要输出 Schema 中不存在的字段；如果问题里出现未建模维度，优先回退到产品线、区域、客户、月份等已有维度
 """
 
@@ -240,7 +271,9 @@ def build_prompt(
 【要求】
 
 1. 只输出 SQL 语句，不需要解释
-2. 使用标准 MySQL 语法
+2. 只使用 MySQL 8 支持的语法：禁止 FULL OUTER JOIN / FULL JOIN / EXCEPT / INTERSECT
+   （MySQL 不支持，会直接报语法错误）；合并两个结果集用 LEFT JOIN、UNION 与
+   COALESCE 组合实现
 3. 确保字段名和表名与 Schema 一致
 4. 如果涉及多表查询，使用 JOIN 连接
 5. 收入口径统一使用 net_amount，成本口径使用 material_cost + labor_cost

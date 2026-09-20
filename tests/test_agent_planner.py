@@ -5,6 +5,7 @@ from chatbi.analysis.agent_planner import (
     PlanGenerator,
     ResultSummarizer,
     StepExecutor,
+    StepExecutionResult,
     TempTableResultStore,
 )
 from chatbi.analysis.report_generator import ReportGenerator
@@ -610,3 +611,62 @@ def test_step_executor_marks_repaired_step_and_emits_retry_event():
     done = [data for name, data in events if name == "step_done"][0]
     assert done["repaired"] is True
     assert done["error_type"] is None
+
+
+def test_step_executor_rewrites_on_database_prefixed_error_type():
+    """真实链路的 error_type 带 database_ 前缀（如 database_sql_syntax），
+    必须同样触发带错误上下文的重写 —— 历史上只匹配裸值，
+    导致归因链路全部退化为原样重试（FULL OUTER JOIN 事故的根因）。"""
+    plan = PlanGenerator().build_plan("最近三个月利润为什么下降？", sample_decomposition())
+    questions_seen: list[str] = []
+
+    def runner(question: str) -> dict:
+        questions_seen.append(question)
+        if len(questions_seen) == 1:
+            return {
+                "success": False,
+                "sql": "SELECT ... FULL OUTER JOIN ...",
+                "error": "SQL 语法错误，请检查字段、聚合和别名是否正确",
+                "error_type": "database_sql_syntax",
+                "raw_error": "You have an error in your SQL syntax near 'FULL'",
+            }
+        return {
+            "success": True,
+            "sql": "SELECT good",
+            "columns": ["a"],
+            "rows": [{"a": 1}],
+            "formatted": "ok",
+        }
+
+    executor = StepExecutor(step_runner=runner, max_retries=1, failure_policy="skip")
+    results = executor.execute_plan(plan, max_steps=1)
+
+    assert results[0].success is True
+    assert results[0].repaired is True
+    # 第二次调用必须携带修复上下文（rewrite），而不是原样重发同一问题
+    assert len(questions_seen) == 2
+    assert "上一次尝试失败" in questions_seen[1]
+    # 回灌的是数据库原始报错（含出错位置），不只是泛化文案
+    assert "near 'FULL'" in questions_seen[1]
+
+
+def test_repair_question_falls_back_without_raw_error():
+    """步骤结果没有 raw_error 时（如自定义 step_runner 未提供），
+    修复问题要降级为泛化错误信息，不能把空文本回灌给模型。"""
+    failed = StepExecutionResult(
+        step_id="step_1",
+        task_id="task_1",
+        step_name="查询月度毛利",
+        success=False,
+        question="查询月度毛利",
+        sql="SELECT bad",
+        error="SQL 语法错误，请检查字段、聚合和别名是否正确",
+        error_type="sql_syntax",
+        raw_error=None,
+    )
+
+    question = StepExecutor._build_repair_question("查询月度毛利", failed)
+
+    assert "数据库返回的错误" in question
+    assert "数据库原始报错" not in question
+    assert "SQL 语法错误" in question

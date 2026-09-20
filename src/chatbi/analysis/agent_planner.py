@@ -72,6 +72,9 @@ class StepExecutionResult(BaseModel):
     formatted: str = ""
     error: str | None = None
     error_type: str | None = None
+    # 数据库原始报错（如 MySQL 1064 全文，含出错位置），
+    # 供修复重写时回灌给模型 —— 泛化后的 error 文案定位不了具体语法点。
+    raw_error: str | None = None
     # 是否已因报错重写过 SQL（用于前端提示与排查）
     repaired: bool = False
 
@@ -699,6 +702,9 @@ class StepExecutor:
                 "sql": error_payload.get("sql") or "".join(sql_parts).strip(),
                 "error": error_payload.get("error"),
                 "error_type": error_payload.get("error_type"),
+                # db_raw_error 由 chatbi_service 放在事件 metadata 里（MySQL 1064 原文），
+                # 提到顶层供 _normalize_result 透传，修复重写时回灌给模型。
+                "raw_error": (error_payload.get("metadata") or {}).get("db_raw_error"),
             }
 
         if final_payload is None:
@@ -782,28 +788,52 @@ class StepExecutor:
 
     @classmethod
     def _should_rewrite(cls, result: StepExecutionResult) -> bool:
-        """判断这次失败是否应该带错误上下文重写 SQL。"""
-        return (result.error_type or "") in cls._REPAIRABLE_ERROR_TYPES
+        """判断这次失败是否应该带错误上下文重写 SQL。
+
+        error_type 存在两种形态：步骤内部直接产生的是裸值（如 sql_syntax），
+        而经 ChatBISystem 转发的是 database_ 前缀形态（如 database_sql_syntax，
+        该前缀是前端错误展示契约，不能去掉）。历史上只匹配裸值，
+        导致真实链路的可修复错误全部退化为「原样重试」，这里做前缀兼容。
+        """
+        error_type = (result.error_type or "").removeprefix("database_")
+        return error_type in cls._REPAIRABLE_ERROR_TYPES
 
     @staticmethod
     def _build_repair_question(
         question: str,
         failed_result: StepExecutionResult,
     ) -> str:
-        """在原始问题后追加「上次 SQL + 报错 + 修正要求」。"""
+        """在原始问题后追加「上次 SQL + 报错 + 修正要求」。
+
+        报错块包含两层：raw_error 是数据库原始报错（含出错位置，如 MySQL 1064
+        会指认具体关键字），模型据此才能定位真正的语法点；error 是面向用户的
+        泛化文案，作补充。历史上只回灌泛化文案，模型看不到出错位置，
+        重写命中率极低。
+        """
+        raw_error = (failed_result.raw_error or "").strip()
+        if raw_error:
+            error_block = (
+                f"数据库原始报错（含出错位置，以此为准）：\n{raw_error}\n\n"
+                f"错误摘要：{failed_result.error or '未知错误'}\n"
+            )
+        else:
+            error_block = f"数据库返回的错误：\n{failed_result.error or '未知错误'}\n"
         return (
             f"{question}\n\n"
             "【上一次尝试失败，请修正后重新生成 SQL】\n"
             f"上一次生成的 SQL：\n{failed_result.sql or '（未生成 SQL）'}\n\n"
-            f"数据库返回的错误：\n{failed_result.error or '未知错误'}\n\n"
+            f"{error_block}\n"
             "修正要求：\n"
             "1. 只修正导致报错的部分，保持原本的查询意图、统计口径、维度和过滤条件不变。\n"
             "2. MySQL 8 默认启用 ONLY_FULL_GROUP_BY：SELECT / HAVING / ORDER BY 中的每一列，\n"
             "   必须出现在 GROUP BY 中，或被聚合函数（SUM/COUNT/MAX/MIN/AVG）包裹。\n"
             "   注意 COALESCE / IFNULL / CASE / ROUND 都是标量函数，不算聚合，\n"
             "   套一层并不能让非聚合列变合法。\n"
-            "3. 不要因为报错就删掉必要的指标或维度，也不要改成与问题无关的查询。\n"
-            "4. 只返回修正后的 SQL。"
+            "3. 若原始报错指出某关键字附近存在语法错误（如 FULL、EXCEPT），\n"
+            "   说明该语法 MySQL 不支持，必须替换为 MySQL 等价写法，\n"
+            "   不要只做微小调整。\n"
+            "4. 不要因为报错就删掉必要的指标或维度，也不要改成与问题无关的查询。\n"
+            "5. 只返回修正后的 SQL。"
         )
 
     def _invoke_step_runner(
@@ -872,6 +902,12 @@ class StepExecutor:
         else:
             normalized_rows = rows
 
+        # raw_error 两种形态都兼容：流式路径已在顶层，同步 run() 路径
+        # 只在 metadata.db_raw_error 里。取不到就保持 None，不影响修复逻辑。
+        raw_error = raw_result.get("raw_error") or (
+            raw_result.get("metadata") or {}
+        ).get("db_raw_error")
+
         return StepExecutionResult(
             step_id=step.step_id,
             task_id=step.task_id,
@@ -889,6 +925,7 @@ class StepExecutor:
             formatted=raw_result.get("formatted", ""),
             error=raw_result.get("error"),
             error_type=raw_result.get("error_type"),
+            raw_error=raw_error,
         )
 
     def _store_intermediate_result(
