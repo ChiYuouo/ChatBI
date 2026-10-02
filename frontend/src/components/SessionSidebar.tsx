@@ -1,6 +1,6 @@
 import React from 'react';
 import { Button, Tooltip, Popconfirm } from 'antd';
-import { PlusOutlined, DeleteOutlined, MessageOutlined } from '@ant-design/icons';
+import { PlusOutlined, DeleteOutlined, MessageOutlined, AppstoreOutlined, DatabaseOutlined } from '@ant-design/icons';
 import { SessionSummary } from '../services/chatbiApi';
 
 interface SessionSidebarProps {
@@ -33,15 +33,21 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
 }) => {
   return (
     <aside className="session-sidebar">
+      <div className="sidebar-brand">
+        <div className="sidebar-brand-mark"><DatabaseOutlined /></div>
+        <div><strong>ChatBI</strong><span>DATA WORKSPACE</span></div>
+      </div>
+      <div className="sidebar-section-label">工作空间</div>
+      <div className="sidebar-nav-active"><AppstoreOutlined /> 智能分析</div>
+      <div className="sidebar-section-label sidebar-history-label">最近会话</div>
       <Button
         block
         type="primary"
-        ghost
         icon={<PlusOutlined />}
         onClick={onNewSession}
-        style={{ marginBottom: 12 }}
+        className="sidebar-new-button"
       >
-        新会话
+        新建分析
       </Button>
 
       {sessions.length === 0 ? (
@@ -94,6 +100,10 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
           })}
         </ul>
       )}
+      <div className="sidebar-footer">
+        <span className="sidebar-footer-dot" />
+        数据仅供授权用户访问
+      </div>
     </aside>
   );
 };

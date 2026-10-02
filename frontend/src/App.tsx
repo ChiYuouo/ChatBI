@@ -664,22 +664,28 @@ export const MainContent: React.FC<MainContentProps> = ({ onUnauthorized, onLogo
 
   return (
     <div className="chatbi-app-layout">
-      <Header
-        health={health}
-        onRefreshHealth={loadHealth}
-        historyCount={feed.length}
-        onLogout={onLogout}
+      <SessionSidebar
+        sessions={sessions}
+        activeSessionId={activeSessionId}
+        onSelect={handleSelectSession}
+        onDelete={handleDeleteSession}
+        onNewSession={handleNewSession}
       />
-
-      <div className="chatbi-body">
-        <SessionSidebar
-          sessions={sessions}
-          activeSessionId={activeSessionId}
-          onSelect={handleSelectSession}
-          onDelete={handleDeleteSession}
-          onNewSession={handleNewSession}
+      <div className="workspace-shell">
+        <Header
+          health={health}
+          onRefreshHealth={loadHealth}
+          historyCount={feed.length}
+          onLogout={onLogout}
         />
         <main className="chatbi-main-container">
+        <div className="workspace-heading">
+          <div>
+            <div className="workspace-eyebrow">WORKSPACE / ANALYTICS</div>
+            <h1>数据工作台</h1>
+            <p>提出业务问题，查看可信的数据结果与分析过程。</p>
+          </div>
+        </div>
         <QueryInputBar
           value={inputQuestion}
           onChange={setInputQuestion}
@@ -692,6 +698,13 @@ export const MainContent: React.FC<MainContentProps> = ({ onUnauthorized, onLogo
         />
 
         <div className="chatbi-feed-section">
+          <div className="feed-section-heading">
+            <div>
+              <span className="feed-section-kicker">ACTIVITY</span>
+              <h2>分析记录</h2>
+            </div>
+            <span className="feed-section-count">{feed.length} 条</span>
+          </div>
           {feed.length === 0 ? (
             <EmptyState />
           ) : (
@@ -716,7 +729,7 @@ export const MainContent: React.FC<MainContentProps> = ({ onUnauthorized, onLogo
             )
           )}
         </div>
-      </main>
+        </main>
       </div>
     </div>
   );
@@ -750,8 +763,8 @@ export default function App() {
       theme={{
         algorithm: theme.defaultAlgorithm,
         token: {
-          colorPrimary: '#1677ff',
-          borderRadius: 8,
+          colorPrimary: '#0f766e',
+          borderRadius: 10,
           fontFamily: `-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif`,
         },
       }}

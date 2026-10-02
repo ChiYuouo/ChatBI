@@ -82,11 +82,9 @@ export const PromptSuggestions: React.FC<PromptSuggestionsProps> = ({
 
   return (
     <div className="prompt-suggestions-wrapper">
-      <div className="prompt-header" style={{ marginBottom: 8 }}>
-        <Text type="secondary" style={{ fontSize: 13, fontWeight: 500 }}>
-          {isAnalyze
-            ? '🔍 归因分析示例（点击直接发起，耗时较长）：'
-            : '💡 常用业务指标快捷查询（点击直接发起）：'}
+      <div className="prompt-header">
+        <Text>
+          快速开始 <span>点击问题可直接发起{isAnalyze ? '分析' : '查询'}</span>
         </Text>
       </div>
 
@@ -97,14 +95,8 @@ export const PromptSuggestions: React.FC<PromptSuggestionsProps> = ({
             icon={item.icon}
             color="default"
             style={{
-              padding: '6px 12px',
-              borderRadius: 16,
               cursor: disabled ? 'not-allowed' : 'pointer',
-              fontSize: 13,
               userSelect: 'none',
-              transition: 'all 0.2s ease',
-              border: '1px solid #d9d9d9',
-              background: '#fafafa',
             }}
             onClick={() => {
               if (!disabled) {

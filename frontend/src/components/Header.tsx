@@ -1,16 +1,10 @@
 import React from 'react';
-import { Space, Typography, Tag, Button, Tooltip } from 'antd';
+import { Button, Tooltip } from 'antd';
 import {
-  DatabaseOutlined,
-  CheckCircleOutlined,
-  CloseCircleOutlined,
-  LoadingOutlined,
   LogoutOutlined,
-  ReloadOutlined,
+  DownOutlined,
 } from '@ant-design/icons';
 import { HealthState } from '../types/chatbi';
-
-const { Title, Text } = Typography;
 
 interface HeaderProps {
   health: HealthState;
@@ -28,74 +22,55 @@ export const Header: React.FC<HeaderProps> = ({
 }) => {
   const getHealthBadge = () => {
     if (health.status === 'checking') {
-      return (
-        <Tag icon={<LoadingOutlined />} color="processing">
-          服务连接中
-        </Tag>
-      );
+      return <span className="health-indicator checking">连接中</span>;
     }
     if (health.status === 'ok' && health.databaseConnected) {
       return (
         <Tooltip title="后端服务正常，数据库已连通">
-          <Tag icon={<CheckCircleOutlined />} color="success" style={{ cursor: 'pointer' }} onClick={onRefreshHealth}>
-            系统正常 (DB 在线)
-          </Tag>
+          <button className="health-indicator online" onClick={onRefreshHealth}>
+            数据服务正常
+          </button>
         </Tooltip>
       );
     }
     if (health.status === 'ok' && !health.databaseConnected) {
       return (
         <Tooltip title="API 正常但数据库连接异常">
-          <Tag icon={<CloseCircleOutlined />} color="warning" style={{ cursor: 'pointer' }} onClick={onRefreshHealth}>
-            数据库异常
-          </Tag>
+          <button className="health-indicator warning" onClick={onRefreshHealth}>数据库异常</button>
         </Tooltip>
       );
     }
     return (
       <Tooltip title={health.message || '后端服务未启动或连接失败'}>
-        <Tag icon={<CloseCircleOutlined />} color="error" style={{ cursor: 'pointer' }} onClick={onRefreshHealth}>
-          服务离线
-        </Tag>
+        <button className="health-indicator offline" onClick={onRefreshHealth}>服务离线</button>
       </Tooltip>
     );
   };
 
   return (
     <header className="chatbi-header">
-      <div className="header-brand">
-        <div className="brand-logo">
-          <DatabaseOutlined style={{ fontSize: 22, color: '#1677ff' }} />
-        </div>
-        <div className="brand-text">
-          <Title level={4} style={{ margin: 0, fontWeight: 700, letterSpacing: '-0.3px' }}>
-            ChatBI 数据分析工作台
-          </Title>
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            基于自然语言的 Text-to-SQL 智能查询引擎
-          </Text>
-        </div>
+      <div className="header-location">
+        <span>工作台</span>
+        <span className="header-location-separator">/</span>
+        <strong>智能分析</strong>
       </div>
-
-      <Space size="middle">
+      <div className="header-actions">
         {getHealthBadge()}
-        {historyCount > 0 && (
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            {historyCount} 条记录
-          </Text>
-        )}
+        <span className="header-activity">本页 {historyCount} 条记录</span>
+        <span className="header-divider" />
+        <div className="account-avatar" aria-label="当前账户">我</div>
         <Tooltip title="退出登录">
           <Button
             type="text"
             size="small"
             icon={<LogoutOutlined />}
             onClick={onLogout}
-            style={{ color: '#8c8c8c' }}
+            className="header-logout"
           >
-            退出
+            退出 <DownOutlined className="header-logout-chevron" />
           </Button>
         </Tooltip>
-      </Space>
+      </div>
     </header>
   );
 };

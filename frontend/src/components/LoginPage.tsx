@@ -42,26 +42,23 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
   };
 
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: '#f5f7fa',
-      }}
-    >
-      <Card
-        style={{ width: 380, borderRadius: 12, boxShadow: '0 8px 32px rgba(0,0,0,0.08)' }}
-        styles={{ body: { padding: '36px 32px' } }}
-      >
-        <div style={{ textAlign: 'center', marginBottom: 28 }}>
-          <DatabaseOutlined style={{ fontSize: 40, color: '#1677ff' }} />
-          <Title level={4} style={{ margin: '12px 0 4px' }}>
-            ChatBI 数据分析工作台
-          </Title>
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            {mode === 'login' ? '请登录后继续' : '创建账号'}
+    <div className="auth-page">
+      <div className="auth-intro">
+        <div className="auth-intro-brand"><span><DatabaseOutlined /></span> ChatBI</div>
+        <div className="auth-intro-copy">
+          <span className="auth-intro-kicker">DATA WORKSPACE</span>
+          <h1>让每个业务问题<br />都有数据依据。</h1>
+          <p>在同一个工作区完成提问、分析和结果回顾。</p>
+        </div>
+        <div className="auth-intro-foot">面向授权用户的数据分析空间</div>
+      </div>
+      <div className="auth-form-side">
+      <Card className="auth-card" variant="borderless">
+        <div className="auth-form-heading">
+          <span className="auth-form-kicker">WELCOME TO CHATBI</span>
+          <Title level={3}>{mode === 'login' ? '欢迎回来' : '创建账号'}</Title>
+          <Text type="secondary">
+            {mode === 'login' ? '登录后继续使用数据工作台' : '注册后由管理员授予访问权限'}
           </Text>
         </div>
 
@@ -134,6 +131,8 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
           </Button>
         </div>
       </Card>
+      <div className="auth-form-foot">© ChatBI · 数据工作台</div>
+      </div>
     </div>
   );
 };

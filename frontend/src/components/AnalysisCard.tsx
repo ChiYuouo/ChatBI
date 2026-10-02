@@ -78,17 +78,12 @@ export const AnalysisCard: React.FC<AnalysisCardProps> = ({
     <Card
       className="query-card-item analysis-card-item"
       variant="borderless"
-      style={{
-        marginBottom: 20,
-        borderRadius: 12,
-        boxShadow: '0 4px 16px rgba(0, 0, 0, 0.05)',
-      }}
     >
       {/* 1. 提问头部 */}
       <div className="query-question-row">
         <div className="question-content">
-          <div className="q-badge analysis-badge">归因</div>
-          <Text strong style={{ fontSize: 16, color: '#1f1f1f' }}>
+          <div className="q-badge analysis-badge">归因分析</div>
+          <Text strong className="question-title">
             {record.question}
           </Text>
         </div>
@@ -151,7 +146,7 @@ export const AnalysisCard: React.FC<AnalysisCardProps> = ({
             percent={percent}
             size="small"
             status="active"
-            strokeColor="#1677ff"
+            strokeColor="#0f766e"
             format={() => `${executedSteps}/${record.totalSteps ?? '—'}`}
           />
         </div>

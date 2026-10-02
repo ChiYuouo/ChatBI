@@ -17,10 +17,8 @@ interface QueryInputBarProps {
 }
 
 const PLACEHOLDER: Record<QueryMode, string> = {
-  query:
-    '输入您的业务查询问题（例如：上个月销售额是多少？），按 Enter 或点击右侧按钮发起查询',
-  analyze:
-    '输入需要归因的业务问题（例如：最近三个月利润为什么下降？），系统将拆解问题并多步分析后给出结论',
+  query: '例如：本月各产品线的销售额是多少？',
+  analyze: '例如：最近三个月利润变化的主要原因是什么？',
 };
 
 export const QueryInputBar: React.FC<QueryInputBarProps> = ({
@@ -46,7 +44,12 @@ export const QueryInputBar: React.FC<QueryInputBarProps> = ({
 
   return (
     <div className="query-input-section">
-      <div className="input-mode-row">
+      <div className="composer-header">
+        <div>
+          <span className="composer-kicker">NEW ANALYSIS</span>
+          <h2>从一个问题开始</h2>
+        </div>
+        <div className="input-mode-row">
         <Tooltip title="数据查询：直接生成 SQL 并返回结果表格；归因分析：拆解问题、多步查询后给出结论">
           <Segmented
             value={mode}
@@ -66,6 +69,7 @@ export const QueryInputBar: React.FC<QueryInputBarProps> = ({
             ]}
           />
         </Tooltip>
+        </div>
       </div>
 
       <div className="sender-box-wrapper">
@@ -81,7 +85,9 @@ export const QueryInputBar: React.FC<QueryInputBarProps> = ({
         />
       </div>
 
-      <div style={{ marginTop: 14 }}>
+      <div className="composer-hint">按 Enter 提交 · 查询过程和结果会保存在当前会话</div>
+
+      <div className="composer-suggestions">
         <PromptSuggestions
           mode={mode}
           onSelectPrompt={handleSelectPrompt}

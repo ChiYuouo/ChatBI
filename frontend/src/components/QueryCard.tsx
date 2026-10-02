@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { Card, Button, Tooltip, Space, Typography, Tag } from 'antd';
 import {
-  QuestionCircleFilled,
   DeleteOutlined,
   RedoOutlined,
   DownOutlined,
@@ -46,17 +45,12 @@ export const QueryCard: React.FC<QueryCardProps> = ({
     <Card
       className="query-card-item"
       bordered={false}
-      style={{
-        marginBottom: 20,
-        borderRadius: 12,
-        boxShadow: '0 4px 16px rgba(0, 0, 0, 0.05)',
-      }}
     >
       {/* 1. 用户提问 Header */}
       <div className="query-question-row">
         <div className="question-content">
-          <div className="q-badge">Q</div>
-          <Text strong style={{ fontSize: 16, color: '#1f1f1f' }}>
+          <div className="q-badge">数据查询</div>
+          <Text strong className="question-title">
             {record.question}
           </Text>
         </div>
