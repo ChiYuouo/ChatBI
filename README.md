@@ -37,7 +37,7 @@ flowchart LR
 docker compose up --build
 ```
 
-打开 [Web 工作台](http://localhost:8080)；[API 文档](http://localhost:8000/docs)和[健康检查](http://localhost:8000/health)也可直接访问。Compose 首次启动时会导入 `docker/mysql/init/` 中的示例业务数据。
+打开 [Web 工作台](http://localhost:8300)；[API 文档](http://localhost:8000/docs)和[健康检查](http://localhost:8000/health)也可直接访问。Compose 首次启动时会导入 `docker/mysql/init/` 中的示例业务数据。若 8300 端口被占用，可在 `.env` 中设置 `FRONTEND_PORT`。
 
 也可以在本地分别运行前后端（需要 Python 3.12+、Node.js 和 MySQL）：
 

@@ -9,8 +9,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# 走阿里云源安装 uv，避免 ghcr.io 拉不动
-RUN pip install uv -i https://mirrors.aliyun.com/pypi/simple/
+# 安装 uv；避免镜像源大文件下载卡住构建
+RUN pip install uv --index-url https://pypi.org/simple/ --timeout 20 --retries 2
 
 # 先按锁文件装依赖，让这层能被代码改动复用缓存
 COPY pyproject.toml uv.lock ./
@@ -18,7 +18,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 
 # 再拷贝源码与运行时依赖的数据文件
 COPY src/ ./src/
-COPY api_service.py main.py ./
+COPY api_service.py ./
 RUN uv sync --frozen --no-dev
 
 # 以下是运行时真实依赖，缺失会在启动或检索时报错：
