@@ -68,6 +68,13 @@ class LoginRequest(BaseModel):
     password: str = Field(..., min_length=1, description="密码")
 
 
+class RegisterRequest(BaseModel):
+    """注册请求体；角色和区域只能由服务端决定。"""
+
+    username: str = Field(..., min_length=1, description="用户名")
+    password: str = Field(..., min_length=1, description="密码")
+
+
 class HealthResponse(BaseModel):
     """健康检查响应。"""
 

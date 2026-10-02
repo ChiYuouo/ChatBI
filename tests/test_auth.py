@@ -6,6 +6,7 @@
 """
 
 import os
+import sqlite3
 import tempfile
 
 from chatbi.api import routes
@@ -75,39 +76,42 @@ def test_empty_token_rejected():
 # ==================== 用户存储 ====================
 
 
-def test_user_store_seeds_demo_accounts_and_authenticates():
+def test_user_store_starts_empty_and_authenticates_inserted_user():
     store = UserStore(os.path.join(tempfile.mkdtemp(), "users.db"))
-
-    admin = store.authenticate("admin", "admin123")
-    assert admin is not None and admin.role == "admin"
-
-    sales = store.authenticate("sales", "sales123")
-    assert sales is not None and sales.role == "sales" and sales.region == "欧洲"
-
-
-def test_user_store_rejects_wrong_password_and_unknown_user():
-    store = UserStore(os.path.join(tempfile.mkdtemp(), "users.db"))
-
-    assert store.authenticate("admin", "wrong") is None
-    assert store.authenticate("nobody", "whatever") is None
-    assert store.authenticate("", "") is None
+    assert store.authenticate("admin", "admin123") is None
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute(
+            "INSERT INTO sys_user"
+            " (user_id, username, password_hash, role, region, enabled, created_at)"
+            " VALUES (?, ?, ?, ?, ?, 1, ?)",
+            ("u_alice", "alice", hash_password("secret"), "sales", "欧洲", "2026-01-01"),
+        )
+    user = store.authenticate("alice", "secret")
+    assert user is not None and user.role == "sales" and user.region == "欧洲"
 
 
-def test_user_store_seeding_is_idempotent():
+def test_user_store_rejects_wrong_password_and_unknown_user(auth_store):
+    assert auth_store.authenticate("tester", "wrong") is None
+    assert auth_store.authenticate("nobody", "whatever") is None
+    assert auth_store.authenticate("", "") is None
+
+
+def test_user_store_initialization_does_not_seed_accounts():
     path = os.path.join(tempfile.mkdtemp(), "users.db")
 
     UserStore(path)
-    UserStore(path)  # 重复初始化不应报错、不应重复插入
+    UserStore(path)  # 重复初始化不应报错，也不应创建演示账号
 
-    assert UserStore(path).authenticate("finance", "finance123") is not None
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM sys_user").fetchone()[0] == 0
 
 
 # ==================== HTTP 层 ====================
 
 
-def test_login_with_demo_account(anonymous_client):
+def test_login_with_existing_account(anonymous_client):
     resp = anonymous_client.post(
-        "/api/v1/login", json={"username": "admin", "password": "admin123"}
+        "/api/v1/login", json={"username": "tester", "password": "test-password"}
     )
 
     assert resp.status_code == 200
@@ -118,9 +122,70 @@ def test_login_with_demo_account(anonymous_client):
 
 def test_login_with_wrong_password_returns_401(anonymous_client):
     resp = anonymous_client.post(
-        "/api/v1/login", json={"username": "admin", "password": "bad"}
+        "/api/v1/login", json={"username": "tester", "password": "bad"}
     )
 
+    assert resp.status_code == 401
+
+
+def test_register_creates_pending_account_without_plaintext_password(anonymous_client, auth_store):
+    resp = anonymous_client.post(
+        "/api/v1/register", json={"username": "new_user", "password": "secret123"}
+    )
+    assert resp.status_code == 201
+    assert "token" not in resp.json()
+    with sqlite3.connect(auth_store.db_path) as conn:
+        row = conn.execute(
+            "SELECT user_id, password_hash, role, region FROM sys_user WHERE username = ?",
+            ("new_user",),
+        ).fetchone()
+    assert row is not None
+    assert row[2:] == ("pending", None)
+    assert row[1] != "secret123"
+    assert verify_password("secret123", row[1])
+    assert anonymous_client.post(
+        "/api/v1/login", json={"username": "new_user", "password": "secret123"}
+    ).status_code == 403
+
+
+def test_register_rejects_duplicate_username_case_insensitively(anonymous_client):
+    payload = {"username": "New_User", "password": "secret123"}
+    assert anonymous_client.post("/api/v1/register", json=payload).status_code == 201
+    payload["username"] = "new_user"
+    assert anonymous_client.post("/api/v1/register", json=payload).status_code == 409
+
+
+def test_register_rejects_invalid_credentials(anonymous_client):
+    assert anonymous_client.post(
+        "/api/v1/register", json={"username": "a", "password": "secret123"}
+    ).status_code == 400
+    assert anonymous_client.post(
+        "/api/v1/register", json={"username": "new_user", "password": "short"}
+    ).status_code == 400
+
+
+def test_approved_account_can_login(anonymous_client, auth_store):
+    anonymous_client.post(
+        "/api/v1/register", json={"username": "new_user", "password": "secret123"}
+    )
+    with sqlite3.connect(auth_store.db_path) as conn:
+        conn.execute("UPDATE sys_user SET role = ? WHERE username = ?", ("finance", "new_user"))
+    resp = anonymous_client.post(
+        "/api/v1/login", json={"username": "new_user", "password": "secret123"}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["user"]["role"] == "finance"
+    assert resp.json()["token"]
+
+
+def test_deleted_account_token_is_rejected(anonymous_client, auth_store):
+    user = AuthUser(user_id="u_sales", username="sales", role="sales", region="欧洲")
+    with sqlite3.connect(auth_store.db_path) as conn:
+        conn.execute("DELETE FROM sys_user WHERE user_id = ?", (user.user_id,))
+    resp = anonymous_client.delete(
+        "/api/v1/session/some-session",
+        headers={"Authorization": f"Bearer {create_token(user)}"},
+    )
     assert resp.status_code == 401
 
 
@@ -138,6 +203,20 @@ def test_business_endpoint_with_garbage_token_returns_401(anonymous_client):
     )
 
     assert resp.status_code == 401
+
+
+def test_browser_auth_preflight_is_allowed(anonymous_client):
+    resp = anonymous_client.options(
+        "/api/v1/query/stream",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization,content-type",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.headers["access-control-allow-origin"] == "http://localhost:3000"
+    assert "authorization" in resp.headers["access-control-allow-headers"].lower()
 
 
 def test_identity_comes_from_token_not_body(anonymous_client, monkeypatch):

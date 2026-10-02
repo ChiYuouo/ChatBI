@@ -6,7 +6,7 @@
 
 ## 功能亮点
 
-- 自然语言转 SQL，支持命令行、REST API 与 SSE 流式输出
+- 自然语言转 SQL，支持 Web 页面、REST API 与 SSE 流式输出
 - Schema Linking 与指标 RAG，按问题动态召回相关表、字段和指标定义
 - Few-shot 示例、业务规则和多表 Join 辅助，提高 SQL 生成准确率
 - 只读 SQL 校验、角色权限、行级过滤与敏感字段脱敏
@@ -23,13 +23,13 @@ flowchart LR
     E --> F[安全校验与权限过滤]
     F --> G[(MySQL)]
     G --> H[结果格式化]
-    H --> I[Web / API / CLI]
+    H --> I[Web / API]
 ```
 
 ## 目录结构
 
 ```text
-frontend/           # 独立运行的原生 Web 前端
+frontend/           # React Web 前端
 src/chatbi/
 ├── analysis/        # 复杂问题拆解、执行计划与分析报告
 ├── api/             # FastAPI 应用、路由、依赖和数据模型
@@ -39,8 +39,7 @@ src/chatbi/
 ├── retrieval/      # 表、字段、指标、Join 和 Schema 检索
 ├── services/       # ChatBI 核心业务流程
 ├── text2sql/       # 问题解析、Prompt 构造和结果格式化
-├── tools/          # 评测、初始化和演示脚本
-└── cli.py          # 命令行入口
+└── tools/          # 评测和初始化脚本
 ```
 
 ## 快速开始
@@ -58,23 +57,21 @@ cp .env.example .env
 uv run uvicorn api_service:app --reload
 
 # 4. 新开一个终端，启动前端服务
-uv run python -m http.server 5173 --directory frontend
+cd frontend
+npm install
+npm run dev
 ```
 
 启动后访问：
 
-- Web 页面：<http://localhost:5173>
+- Web 页面：<http://localhost:3000>
 - API 文档：<http://localhost:8000/docs>
 - 健康检查：<http://localhost:8000/health>
 
-前端默认请求 `http://localhost:8000`，可在 `frontend/config.js` 中修改后端地址。
+前端默认请求 `http://localhost:8000`，可在 `frontend/public/config.js` 中修改后端地址。
 后端通过 `CORS_ALLOWED_ORIGINS` 环境变量配置允许访问 API 的前端地址。
 
-也可以直接使用命令行：
-
-```bash
-uv run python main.py "上个月销售额是多少？"
-```
+登录使用独立的 `data/users.db`。示例账号已移除。注册后账号以 `pending` 角色保存，需由管理员将 `sys_user.role` 授予 `admin`、`finance` 或 `sales` 后才能登录；授予 `sales` 时还需设置 `region`。当前项目尚无管理员审批页面，可在账户库中手动授权。
 
 ## 配置说明
 
@@ -121,7 +118,7 @@ uv run python -m chatbi.tools.evaluator --report reports/evaluation_report.md
 
 ## 技术栈
 
-Python · FastAPI · OpenAI API · MySQL · ChromaDB · LangChain · 原生 HTML/CSS/JavaScript
+Python · FastAPI · OpenAI API · MySQL · ChromaDB · LangChain · React · TypeScript
 
 ## 说明
 

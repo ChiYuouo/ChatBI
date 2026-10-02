@@ -119,7 +119,10 @@ class QuerySecurityManager:
         return columns, masked_rows
 
     def _get_policy(self, role: str) -> SecurityPolicy:
-        return self.role_policies.get(role.lower(), self.role_policies["admin"])
+        policy = self.role_policies.get(role.lower())
+        if policy is None:
+            raise SecurityError("当前账号没有查询权限。")
+        return policy
 
     @staticmethod
     def _normalize_sql(sql: str) -> str:

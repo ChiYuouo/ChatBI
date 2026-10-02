@@ -14,12 +14,15 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import secrets
 import sqlite3
 import threading
 import time
+import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 
 import jwt
@@ -123,25 +126,22 @@ CREATE TABLE IF NOT EXISTS sys_user (
     enabled       INTEGER NOT NULL DEFAULT 1,
     created_at    TEXT NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sys_user_username_nocase
+    ON sys_user (username COLLATE NOCASE);
 """
 
-# 首次启动自动创建的演示账号；密码是公开默认值，生产环境务必修改
-_DEMO_USERS = [
-    ("u_admin", "admin", "admin123", "admin", None),
-    ("u_finance", "finance", "finance123", "finance", None),
-    ("u_sales", "sales", "sales123", "sales", "欧洲"),
-]
+
+class UsernameAlreadyExistsError(ValueError):
+    """用户名已被注册。"""
 
 
 class UserStore:
     """SQLite 用户存储。每次操作独立连接，与会话存储相同的并发策略。"""
 
-    def __init__(self, db_path: str | None = None, seed_defaults: bool = True):
+    def __init__(self, db_path: str | None = None):
         self.db_path = db_path or os.getenv("USERS_DB_PATH", DEFAULT_USERS_DB_PATH)
         self._write_lock = threading.Lock()
         self._ensure_schema()
-        if seed_defaults:
-            self._seed_demo_users()
 
     # ------------------------------------------------------------------ 内部
 
@@ -163,31 +163,6 @@ class UserStore:
         except (sqlite3.Error, OSError) as exc:
             logger.warning("用户表初始化失败，登录功能不可用: %s", exc)
 
-    def _seed_demo_users(self) -> None:
-        try:
-            with self._write_lock:
-                conn = self._connect()
-                try:
-                    with conn:
-                        for user_id, username, password, role, region in _DEMO_USERS:
-                            conn.execute(
-                                "INSERT OR IGNORE INTO sys_user"
-                                " (user_id, username, password_hash, role, region, enabled, created_at)"
-                                " VALUES (?, ?, ?, ?, ?, 1, ?)",
-                                (
-                                    user_id,
-                                    username,
-                                    hash_password(password),
-                                    role,
-                                    region,
-                                    datetime.now().isoformat(timespec="seconds"),
-                                ),
-                            )
-                finally:
-                    conn.close()
-        except (sqlite3.Error, OSError) as exc:
-            logger.warning("演示账号初始化失败: %s", exc)
-
     @staticmethod
     def _row_to_user(row: sqlite3.Row) -> AuthUser | None:
         if not row or not row["enabled"]:
@@ -201,6 +176,44 @@ class UserStore:
 
     # ------------------------------------------------------------------ 对外
 
+    def register(self, username: str, password: str) -> AuthUser:
+        """创建账号；角色由服务端固定分配，客户端不能自报权限。"""
+        normalized_username = (username or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_]{3,32}", normalized_username):
+            raise ValueError("用户名须为 3～32 位字母、数字或下划线")
+        if not password or not 8 <= len(password) <= 128:
+            raise ValueError("密码长度须为 8～128 位")
+
+        user = AuthUser(
+            user_id=uuid.uuid4().hex,
+            username=normalized_username,
+            role="pending",
+        )
+        password_hash = hash_password(password)
+        try:
+            with self._write_lock:
+                conn = self._connect()
+                try:
+                    with conn:
+                        conn.execute(
+                            "INSERT INTO sys_user"
+                            " (user_id, username, password_hash, role, region, enabled, created_at)"
+                            " VALUES (?, ?, ?, ?, ?, 1, ?)",
+                            (
+                                user.user_id,
+                                user.username,
+                                password_hash,
+                                user.role,
+                                user.region,
+                                datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                            ),
+                        )
+                finally:
+                    conn.close()
+        except sqlite3.IntegrityError as exc:
+            raise UsernameAlreadyExistsError("用户名已存在") from exc
+        return user
+
     def authenticate(self, username: str | None, password: str | None) -> AuthUser | None:
         """登录校验：按 username 查行 → 校验密码与启用状态。失败返回 None。"""
         if not username or not password:
@@ -209,7 +222,7 @@ class UserStore:
             conn = self._connect()
             try:
                 row = conn.execute(
-                    "SELECT * FROM sys_user WHERE username = ?", (username,)
+                    "SELECT * FROM sys_user WHERE username = ? COLLATE NOCASE", (username,)
                 ).fetchone()
             finally:
                 conn.close()
@@ -226,7 +239,7 @@ class UserStore:
         return user
 
     def get(self, user_id: str) -> AuthUser | None:
-        """按 user_id 取用户（备用；当前鉴权不依赖它 —— token 自包含）。"""
+        """按 user_id 读取当前用户，供请求鉴权与账号停用检查。"""
         if not user_id:
             return None
         try:
@@ -243,9 +256,17 @@ class UserStore:
         return self._row_to_user(row)
 
 
+@lru_cache(maxsize=1)
+def get_user_store() -> UserStore:
+    """API 共用的用户存储实例，按需创建。"""
+    return UserStore()
+
+
 __all__ = [
     "AuthUser",
     "UserStore",
+    "UsernameAlreadyExistsError",
+    "get_user_store",
     "create_token",
     "decode_token",
     "hash_password",

@@ -130,6 +130,20 @@ export async function login(username: string, password: string): Promise<LoginRe
   return response.json();
 }
 
+/** 创建待授权账号。 */
+export async function register(username: string, password: string): Promise<{ message: string }> {
+  const apiBase = getApiBaseUrl();
+  const response = await fetch(`${apiBase}/api/v1/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  return response.json();
+}
+
 /** 带登录态的 fetch：自动附 Authorization；401 时清 token 并抛 UnauthorizedError */
 async function authedFetch(url: string, options: RequestInit = {}): Promise<Response> {
   const token = getToken();

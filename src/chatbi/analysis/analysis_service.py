@@ -5,7 +5,7 @@
 整条链路封装为可流式消费的事件源，供 API 层直接转发为 SSE。
 
 与 agent_planner.PlanAndExecuteAgent 的区别：
-- PlanAndExecuteAgent 是阻塞式 CLI 入口，跑完才返回全部结果；
+- PlanAndExecuteAgent 的 run 方法在执行完毕后返回全部结果；
 - AnalysisService 是流式编排层，每完成一个阶段就立即产出事件，
   前端因此能看到「正在拆解」「第 2 步正在写 SQL」「正在归因」的实时进展。
 """

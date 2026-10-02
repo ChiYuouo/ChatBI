@@ -57,6 +57,9 @@ def create_app() -> FastAPI:
         ],
     )
 
+    # 先注册鉴权，再注册 CORS：CORS 需要在最外层处理浏览器的 OPTIONS 预检，
+    # 并为鉴权返回的 401 响应附上跨域响应头。
+    application.middleware("http")(attach_user_context)
     application.add_middleware(
         CORSMiddleware,
         allow_origins=APP_CONFIG["http"]["cors_allowed_origins"],
@@ -64,8 +67,6 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    application.middleware("http")(attach_user_context)
-
     @application.exception_handler(RequestValidationError)
     async def validation_exception_handler(
         request: Request,

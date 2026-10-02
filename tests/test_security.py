@@ -47,6 +47,12 @@ def test_security_manager_rejects_non_select_sql():
         manager.secure_sql("DELETE FROM sales_orders", user)
 
 
+def test_security_manager_rejects_unassigned_role():
+    manager = QuerySecurityManager()
+    with pytest.raises(SecurityError, match="没有查询权限"):
+        manager.secure_sql("SELECT * FROM sales_orders", UserContext(user_id="new", role="pending"))
+
+
 def test_security_manager_injects_region_filter_for_sales_role():
     manager = QuerySecurityManager()
     user = UserContext(user_id="u_sales_east", role="sales", region="华东大区")

@@ -249,12 +249,3 @@ class QueryDecomposer:
             f"{error_message}\n"
             "请重新拆解，并严格修正上述问题后只返回 JSON。"
         )
-
-
-if __name__ == "__main__":
-    import sys
-
-    question = " ".join(sys.argv[1:]).strip() or "最近三个月利润为什么下降？"
-    decomposer = QueryDecomposer()
-    result = decomposer.decompose(question)
-    print(json.dumps(result, ensure_ascii=False, indent=2))

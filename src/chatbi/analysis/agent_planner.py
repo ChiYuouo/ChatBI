@@ -7,7 +7,6 @@ Plan-and-Execute Agent 骨架模块
 
 from __future__ import annotations
 
-import argparse
 import json
 import re
 import sys
@@ -1111,91 +1110,3 @@ class PlanAndExecuteAgent:
             "summary": summary.model_dump(),
             "report": report.model_dump(),
         }
-
-
-def _json_default(value: Any) -> str:
-    """为 CLI 输出提供兜底序列化。"""
-    if isinstance(value, Decimal):
-        return str(value)
-    return str(value)
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Plan-and-Execute Agent 骨架")
-    parser.add_argument("question", nargs="?", default="最近三个月利润为什么下降？")
-    parser.add_argument(
-        "--plan-only",
-        action="store_true",
-        help="只执行真实拆解与计划生成，不执行后续查询。",
-    )
-    parser.add_argument(
-        "--max-steps",
-        type=int,
-        default=None,
-        help="限制实际执行的步骤数，便于分步验证真实链路。",
-    )
-    parser.add_argument(
-        "--disable-schema-linking",
-        action="store_true",
-        help="执行步骤时关闭 Schema Linking，直接使用基础 Text2SQL 链路。",
-    )
-    parser.add_argument(
-        "--disable-indicator-rag",
-        action="store_true",
-        help="执行步骤时关闭指标 RAG，避免额外检索链路干扰验证。",
-    )
-    parser.add_argument(
-        "--max-retries",
-        type=int,
-        default=0,
-        help="单步执行失败后的最大重试次数。",
-    )
-    parser.add_argument(
-        "--failure-policy",
-        choices=["abort", "skip"],
-        default="abort",
-        help="步骤失败后如何处理后续链路。",
-    )
-    parser.add_argument(
-        "--storage-backend",
-        choices=["memory", "temp_table"],
-        default="memory",
-        help="中间结果引用方式。",
-    )
-    args = parser.parse_args()
-
-    if args.plan_only:
-        _print_progress("开始任务拆解。")
-        decomposer = QueryDecomposer()
-        planner = PlanGenerator()
-        decomposition = decomposer.decompose(args.question)
-        _print_progress(
-            f"任务拆解完成，共 {len(decomposition.get('subtasks', []))} 个子任务。"
-        )
-        _print_progress("开始生成执行计划。")
-        plan = planner.build_plan(args.question, decomposition)
-        _print_progress(f"执行计划生成完成，共 {len(plan.steps)} 个步骤。")
-        result = {
-            "original_question": args.question,
-            "decomposition": decomposition,
-            "plan": plan.model_dump(),
-        }
-    else:
-        executor = StepExecutor(
-            chatbi_run_options={
-                "use_schema_linking": not args.disable_schema_linking,
-                "use_indicator_rag": not args.disable_indicator_rag,
-                "use_indicator_knowledge": True,
-            },
-            max_retries=args.max_retries,
-            failure_policy=args.failure_policy,
-            storage_backend=args.storage_backend,
-        )
-        agent = PlanAndExecuteAgent(executor=executor)
-        result = agent.run(args.question, max_steps=args.max_steps)
-
-    print(json.dumps(result, ensure_ascii=False, indent=2, default=_json_default))
-
-
-if __name__ == "__main__":
-    main()

@@ -21,10 +21,11 @@ from chatbi.api.schemas import (
     ErrorResponse,
     HealthResponse,
     LoginRequest,
+    RegisterRequest,
     QueryRequest,
     QuerySuccessResponse,
 )
-from chatbi.core.auth import UserStore, create_token
+from chatbi.core.auth import UsernameAlreadyExistsError, create_token, get_user_store
 from chatbi.core.config import APP_CONFIG
 from chatbi.core.security import UserContext
 
@@ -55,27 +56,18 @@ def health_check() -> HealthResponse:
     )
 
 
-_auth_store: UserStore | None = None
-
-
-def _get_auth_store() -> UserStore:
-    """懒加载用户存储：仅 import 本模块不应在工作区落下 users.db。"""
-    global _auth_store
-    if _auth_store is None:
-        _auth_store = UserStore()
-    return _auth_store
-
-
 @router.post("/api/v1/login", tags=["系统"], summary="登录")
 def login(payload: LoginRequest) -> dict:
     """用户名密码换身份 token。
 
-    token 内含 user_id / role / region，之后所有请求凭它确定身份；
+    token 内含 user_id / role / region，后续请求会重新核对当前账号；
     请求体自报身份的通道已删除。
     """
-    user = _get_auth_store().authenticate(payload.username, payload.password)
+    user = get_user_store().authenticate(payload.username, payload.password)
     if user is None:
         raise HTTPException(status_code=401, detail="用户名或密码错误")
+    if user.role == "pending":
+        raise HTTPException(status_code=403, detail="账号待授权，请联系管理员")
     return {
         "token": create_token(user),
         "user": {
@@ -85,6 +77,18 @@ def login(payload: LoginRequest) -> dict:
             "region": user.region,
         },
     }
+
+
+@router.post("/api/v1/register", status_code=201, tags=["系统"], summary="注册")
+def register(payload: RegisterRequest) -> dict:
+    """创建待授权账号；公开注册不能自行取得查询权限。"""
+    try:
+        get_user_store().register(payload.username, payload.password)
+    except UsernameAlreadyExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"message": "注册成功，请等待管理员授权"}
 
 
 @router.post(

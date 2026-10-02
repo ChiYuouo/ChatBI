@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 
 from chatbi.analysis.analysis_service import AnalysisService
 from chatbi.api.schemas import AnalyzeRequest, ErrorResponse, QueryRequest
-from chatbi.core.auth import decode_token
+from chatbi.core.auth import decode_token, get_user_store
 from chatbi.core.config import APP_CONFIG
 from chatbi.core.security import UserContext
 from chatbi.services.chatbi_service import ChatBISystem
@@ -91,7 +91,7 @@ def _resolve_analyze_options(payload: AnalyzeRequest, app_config: dict) -> dict[
 
 
 # 无需登录即可访问的路径
-_PUBLIC_PATHS = frozenset({"/", "/health", "/api/v1/login"})
+_PUBLIC_PATHS = frozenset({"/", "/health", "/api/v1/login", "/api/v1/register"})
 # 文档类前缀（FastAPI 自带的 Swagger / OpenAPI）
 _PUBLIC_PREFIXES = ("/docs", "/openapi", "/redoc")
 
@@ -111,7 +111,8 @@ async def attach_user_context(request: Request, call_next):
     auth_header = request.headers.get("authorization", "")
     token = auth_header[7:].strip() if auth_header.lower().startswith("bearer ") else ""
     user = decode_token(token)
-    if user is None:
+    stored_user = get_user_store().get(user.user_id) if user is not None else None
+    if stored_user is None or stored_user.role == "pending":
         return JSONResponse(
             status_code=401,
             content=ErrorResponse(
@@ -122,8 +123,8 @@ async def attach_user_context(request: Request, call_next):
         )
 
     request.state.user_context = UserContext(
-        user_id=user.user_id,
-        role=user.role,
-        region=user.region,
+        user_id=stored_user.user_id,
+        role=stored_user.role,
+        region=stored_user.region,
     )
     return await call_next(request)
