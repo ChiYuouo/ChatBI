@@ -32,7 +32,7 @@ from chatbi.infrastructure.database import QueryExecutionError
 from chatbi.infrastructure.session_store import SessionStore
 from chatbi.retrieval.indicator_knowledge import IndicatorKnowledge
 from chatbi.text2sql.prompt_builder import build_prompt
-from chatbi.text2sql.query_rewriter import QueryRewriter
+from chatbi.text2sql.query_rewriter import QueryRewriter, needs_history_context
 
 
 @dataclass(slots=True)
@@ -198,10 +198,10 @@ class ChatBISystem:
                 user_context.user_id,
             )
 
-        # 提问改写：只在有历史时才做 —— 单轮查询没有指代可消解，白白多花一次调用。
-        # 改写失败会降级为原问题，不影响本次查询。
+        # 完整问题使用自身条件；只有追问才把历史交给改写器和 SQL 生成器。
+        context_history = history if needs_history_context(user_question) else ""
         rewritten_question = user_question
-        if history and options["use_query_rewrite"]:
+        if context_history and options["use_query_rewrite"]:
             generator = None
             if self._rewriter_needs_llm:
                 generator = lambda system_msg, prompt: runtime.llm.generate_text(
@@ -210,7 +210,7 @@ class ChatBISystem:
                 )
             rewritten_question = self.query_rewriter.rewrite(
                 user_question,
-                history,
+                context_history,
                 text_generator=generator,
             )
 
@@ -221,7 +221,7 @@ class ChatBISystem:
             use_guards=options["use_guards"],
             indicator_knowledge=indicator_block,
             use_schema_linking=options["use_schema_linking"],
-            history=history,
+            history=context_history,
         )
         return _PreparedQuery(
             runtime=runtime,

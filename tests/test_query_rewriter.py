@@ -3,7 +3,7 @@
 按项目约定，全程使用假的文本生成器，不依赖真实模型服务。
 """
 
-from chatbi.text2sql.query_rewriter import QueryRewriter
+from chatbi.text2sql.query_rewriter import QueryRewriter, needs_history_context
 
 HISTORY = (
     "第1轮 用户问：统计各地区的订单数量和净销售额\n"
@@ -29,6 +29,25 @@ def test_rewrites_follow_up_question():
     rewriter = make_rewriter("2026年2月各地区的订单数量和净销售额")
 
     assert rewriter.rewrite("那2月呢？", HISTORY) == "2026年2月各地区的订单数量和净销售额"
+
+
+def test_complete_question_does_not_inherit_previous_time_range():
+    question = "查询所有销售额排名前三的产品线"
+    calls = []
+
+    def generator(system_msg, prompt):
+        calls.append(prompt)
+        return "查询上个月销售额排名前三的产品线"
+
+    assert not needs_history_context(question)
+    assert QueryRewriter(generator).rewrite(question, HISTORY) == question
+    assert calls == []
+
+
+def test_short_follow_up_still_uses_history():
+    assert needs_history_context("2月呢？")
+    assert needs_history_context("那前十名呢？")
+    assert not needs_history_context("查询上个月销售额排名前三的产品线")
 
 
 def test_override_generator_takes_precedence():

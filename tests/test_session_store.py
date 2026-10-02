@@ -364,6 +364,27 @@ def test_follow_up_is_rewritten_before_generating_sql():
     assert "2026年2月各区域的订单量" in llm.prompts[1]
 
 
+def test_complete_question_does_not_pass_previous_time_range_to_sql_prompt():
+    calls = []
+
+    def generator(system_msg, prompt):
+        calls.append(prompt)
+        return "查询上个月销售额排名前三的产品线"
+
+    system, llm, _ = build_system(query_rewriter=QueryRewriter(generator))
+    system.run(user_question="查询上个月销售额", session_id="s1", **HERMETIC_OPTIONS)
+    system.run(
+        user_question="查询所有销售额排名前三的产品线",
+        session_id="s1",
+        **HERMETIC_OPTIONS,
+    )
+
+    assert calls == []
+    assert "【对话历史】" not in llm.prompts[1]
+    assert "查询所有销售额排名前三的产品线" in llm.prompts[1]
+    assert "上个月" not in llm.prompts[1]
+
+
 def test_rewrite_can_be_disabled_per_request():
     rewriter = QueryRewriter(lambda system_msg, prompt: "2026年2月各区域的订单量")
     system, llm, _ = build_system(query_rewriter=rewriter)

@@ -23,6 +23,24 @@ logger = logging.getLogger("chatbi.rewrite")
 # 超过这个长度基本可判定模型在自由发挥，按失败处理
 _MAX_REWRITE_CHARS = 200
 
+_CONTEXT_CUE = re.compile(
+    r"^那(?:么)?|^再|^也|^还|^继续|^改成|^换成|^同样|^同理|"
+    r"(?:呢|怎么样|如何)[？?]?$|上文|上述|前面|刚才|上一轮|上一个|"
+    r"这个(?:指标|产品|地区|客户|问题)|那个(?:指标|产品|地区|客户|问题)|"
+    r"这些|那些|该(?:指标|产品|地区|客户)"
+)
+_STANDALONE_VERB = re.compile(r"^(?:查询|统计|计算|列出|显示|分析|比较|对比)")
+
+
+def needs_history_context(question: str) -> bool:
+    """只有显式追问或短省略句才需要借用会话历史。"""
+    text = (question or "").strip()
+    if not text:
+        return False
+    return bool(_CONTEXT_CUE.search(text)) or (
+        len(text.rstrip("？?。")) <= 6 and not _STANDALONE_VERB.match(text)
+    )
+
 _SYSTEM_MSG = (
     "你是 ChatBI 系统中的提问改写器。"
     "你的任务是把带指代或省略的追问，改写成一个可以独立理解的问题。"
@@ -36,9 +54,10 @@ _PROMPT_TEMPLATE = """【对话历史】
 
 请把「当前问题」改写为自包含的完整问题，要求：
 1. 补全代词与省略（例如「那2月呢？」应改写为「2026年2月各地区的订单数量和净销售额」）
-2. 保持原意，不要添加历史中并不存在的限定条件
-3. 只输出改写后的问题本身，不要解释、不要加引号
-4. 若当前问题本身已经自包含，原样输出
+2. 当前问题明确给出的范围优先；「所有」「全部」表示不要继承历史中的时间范围
+3. 历史只用于补全当前问题省略的内容，不要添加当前问题没有要求的限定条件
+4. 只输出改写后的问题本身，不要解释、不要加引号
+5. 若当前问题本身已经自包含，原样输出
 """
 
 
@@ -87,7 +106,7 @@ class QueryRewriter:
 
         无历史、改写失败、或结果不可信时，一律返回原问题。
         """
-        if not history or not (question or "").strip():
+        if not history or not needs_history_context(question):
             return question
 
         generator = text_generator or self.text_generator
@@ -105,4 +124,4 @@ class QueryRewriter:
         return rewritten
 
 
-__all__ = ["QueryRewriter"]
+__all__ = ["QueryRewriter", "needs_history_context"]
