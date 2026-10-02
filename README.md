@@ -70,7 +70,7 @@ uv run python -m chatbi.tools.init_admin
 
 脚本写入独立的 SQLite 账户库 `data/users.db`，密码以哈希形式保存；重复运行不会覆盖已有的 `admin` 账号。默认凭据仅用于本地演示，不应直接用于公开部署。
 
-其他用户可以在登录页注册。新账号默认为 `pending`，需要管理员在 `sys_user` 表中授予 `admin`、`finance` 或 `sales` 角色后才能登录；`sales` 角色还需要设置 `region`。当前版本尚未提供管理员审批页面。
+其他用户可以在登录页注册。新账号默认为 `pending`，需要管理员在 授权页面 授予 `admin`、`finance` 或 `sales` 角色后才能登录；`sales` 角色还需要设置 `region`。
 
 ## Text-to-SQL 评测
 
