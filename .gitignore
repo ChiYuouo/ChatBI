@@ -16,6 +16,7 @@ dist/
 
 # Test and tool caches
 .pytest_cache/
+.pytest_tmp/
 .mypy_cache/
 .ruff_cache/
 .coverage
@@ -33,7 +34,8 @@ htmlcov/
 # Logs and local data
 *.log
 *.sqlite3
-reports/
+/reports/*
+!reports/evaluation_report.md
 
 # Local session store (SQLite, created at runtime)
 data/sessions.db*

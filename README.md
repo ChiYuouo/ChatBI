@@ -1,125 +1,106 @@
-# ChatBI MVP
+# ChatBI 智能数据分析平台
 
-一个面向业务分析场景的轻量级 Text-to-SQL 项目：用户用自然语言提问，系统结合数据库 Schema、指标知识与业务规则生成只读 SQL，并返回可视化表格结果。
+ChatBI 是一个面向业务分析的自然语言数据查询项目。用户在工作台提问，系统结合数据库结构、指标定义与业务规则生成 SQL，展示查询过程和结果；对于“为什么下降”一类问题，还可以拆解分析步骤并生成归因报告。
 
-> 当前为 MVP / 学习项目，请勿直接用于生产环境或连接高权限数据库账号。
+## 技术栈
 
-## 功能亮点
+Python 3.12 · FastAPI · MySQL · SQLite · ChromaDB · OpenAI 兼容 API · React · TypeScript · Ant Design
 
-- 自然语言转 SQL，支持 Web 页面、REST API 与 SSE 流式输出
-- Schema Linking 与指标 RAG，按问题动态召回相关表、字段和指标定义
-- Few-shot 示例、业务规则和多表 Join 辅助，提高 SQL 生成准确率
-- 只读 SQL 校验、角色权限、行级过滤与敏感字段脱敏
-- 独立 Web 前端，可直接查看生成的 SQL 和查询结果
+## 核心能力
+
+- **自然语言查询**：将业务问题转为 SQL，支持流式展示生成过程、结果表格和会话追问。
+- **归因分析**：拆解复杂问题、执行多个子查询，并汇总分析结论。
+- **业务知识检索**：按需检索 Schema、指标定义和示例，辅助 SQL 生成。
+- **数据访问控制**：登录鉴权、只读 SQL 校验、角色权限、行级过滤与敏感字段脱敏。
+- **Web 工作台**：集中管理会话、查看 SQL、查询结果与分析报告。
 
 ## 工作流程
 
 ```mermaid
 flowchart LR
-    A[自然语言问题] --> B[问题解析]
-    B --> C[Schema / 指标检索]
-    C --> D[Prompt 构建]
-    D --> E[LLM 生成 SQL]
-    E --> F[安全校验与权限过滤]
-    F --> G[(MySQL)]
-    G --> H[结果格式化]
-    H --> I[Web / API]
+    A[业务问题] --> B[问题理解与知识检索]
+    B --> C[SQL 生成]
+    C --> D[安全与权限校验]
+    D --> E[(MySQL 业务数据)]
+    E --> F[结果表格 / 归因报告]
+    F --> G[Web 工作台]
 ```
 
-## 目录结构
+前端使用 React 和 TypeScript，后端由 FastAPI 提供 REST 与 SSE 接口。业务数据保存在 MySQL；账户和会话记录分别保存在独立的 SQLite 数据库中。
 
-```text
-frontend/           # React Web 前端
-src/chatbi/
-├── analysis/        # 复杂问题拆解、执行计划与分析报告
-├── api/             # FastAPI 应用、路由、依赖和数据模型
-├── bootstrap/       # 应用运行时与依赖装配
-├── core/            # 配置和安全策略
-├── infrastructure/ # 数据库与大模型客户端
-├── retrieval/      # 表、字段、指标、Join 和 Schema 检索
-├── services/       # ChatBI 核心业务流程
-├── text2sql/       # 问题解析、Prompt 构造和结果格式化
-└── tools/          # 评测和初始化脚本
-```
 
 ## 快速开始
 
-要求：Python 3.12+、MySQL，以及一个 OpenAI 兼容的模型服务。
+需要 Docker Compose，以及一个兼容 OpenAI API 的模型服务。复制 `.env.example` 为 `.env`，填写 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`LLM_MODEL`、`EMBEDDING_MODEL`、`DB_PASSWORD` 和 `JWT_SECRET`，然后启动：
 
 ```bash
-# 1. 安装依赖
+docker compose up --build
+```
+
+打开 [Web 工作台](http://localhost:8080)；[API 文档](http://localhost:8000/docs)和[健康检查](http://localhost:8000/health)也可直接访问。Compose 首次启动时会导入 `docker/mysql/init/` 中的示例业务数据。
+
+也可以在本地分别运行前后端（需要 Python 3.12+、Node.js 和 MySQL）：
+
+```bash
 uv sync
-
-# 2. 配置环境变量
-cp .env.example .env
-
-# 3. 启动后端服务
 uv run uvicorn api_service:app --reload
+```
 
-# 4. 新开一个终端，启动前端服务
+另开终端：
+
+```bash
 cd frontend
 npm install
 npm run dev
 ```
 
-启动后访问：
+本地前端地址为 <http://localhost:3000>。前端 API 地址可在 `frontend/public/config.js` 中配置；Docker 部署使用同源反向代理。
 
-- Web 页面：<http://localhost:3000>
-- API 文档：<http://localhost:8000/docs>
-- 健康检查：<http://localhost:8000/health>
+### 账户授权
 
-前端默认请求 `http://localhost:8000`，可在 `frontend/public/config.js` 中修改后端地址。
-后端通过 `CORS_ALLOWED_ORIGINS` 环境变量配置允许访问 API 的前端地址。
-
-登录使用独立的 `data/users.db`。示例账号已移除。注册后账号以 `pending` 角色保存，需由管理员将 `sys_user.role` 授予 `admin`、`finance` 或 `sales` 后才能登录；授予 `sales` 时还需设置 `region`。当前项目尚无管理员审批页面，可在账户库中手动授权。
-
-## 配置说明
-
-复制 `.env.example` 后，至少填写以下配置：
-
-```env
-OPENAI_API_KEY="your_openai_api_key"
-OPENAI_BASE_URL="https://api.openai.com/v1"
-LLM_MODEL="your_llm_model"
-EMBEDDING_MODEL="text-embedding-3-large"
-
-DB_HOST="localhost"
-DB_PORT="3306"
-DB_USER="root"
-DB_PASSWORD="your_mysql_password"
-DB_NAME="chatbi_mvp"
-```
-
-建议为项目单独创建仅有 `SELECT` 权限的数据库账号。若启用 Schema Linking 或指标 RAG，可分别运行 `uv run python -m chatbi.retrieval.schema_linker`、`uv run python -m chatbi.retrieval.indicator_retriever` 初始化或重建本地向量索引。
-
-## API 示例
+首次启动后，可运行账户初始化脚本，创建默认管理员（账号和密码均为 `admin`）：
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/query \
-  -H "Content-Type: application/json" \
-  -d '{"question":"按产品线统计本月销售额"}'
+# Docker Compose
+docker compose exec backend python -m chatbi.tools.init_admin
+
+# 本地运行
+uv run python -m chatbi.tools.init_admin
 ```
 
-流式查询使用 `POST /api/v1/query/stream`。用户角色可通过 `X-User-Role`、`X-User-Region` 请求头传入。
+脚本写入独立的 SQLite 账户库 `data/users.db`，密码以哈希形式保存；重复运行不会覆盖已有的 `admin` 账号。默认凭据仅用于本地演示，不应直接用于公开部署。
 
-## 测试
+其他用户可以在登录页注册。新账号默认为 `pending`，需要管理员在 `sys_user` 表中授予 `admin`、`finance` 或 `sales` 角色后才能登录；`sales` 角色还需要设置 `region`。当前版本尚未提供管理员审批页面。
 
-```bash
-uv run pytest -q
+## Text-to-SQL 评测
+
+2026-10-02 使用当前代码、50 道示例业务问题、已配置的模型服务与 MySQL 重新运行评测。评测将生成 SQL 和参考 SQL 分别执行，以结果是否等价作为主要指标：
+
+| 指标 | 结果 |
+| --- | ---: |
+| 执行结果正确 | 42 / 50（84.0%） |
+| 简单问题 | 14 / 15（93.3%） |
+| 中等问题 | 14 / 20（70.0%） |
+| 复杂问题 | 14 / 15（93.3%） |
+| SQL 执行失败 | 0 |
+| 执行成功但结果不匹配 | 8 |
+
+本次运行的[完整评测报告](reports/evaluation_report.md)包含逐题结果。评测命令为 `uv run python -m chatbi.tools.evaluator --report reports/evaluation_report.md`。这组数字反映当前示例数据与评测题集上的 SQL 生成表现，不代表任意业务数据库上的准确率。
+
+
+## 项目结构
+
+```text
+frontend/              React Web 工作台
+src/chatbi/
+├── analysis/           复杂问题拆解、执行计划与报告生成
+├── api/                FastAPI 路由、鉴权与数据模型
+├── core/               配置、安全策略与账户管理
+├── infrastructure/     数据库、大模型与会话存储
+├── retrieval/          Schema 和指标检索
+├── services/           查询与分析业务流程
+├── text2sql/           问题处理、Prompt 与结果格式化
+└── tools/              评测工具
+tests/                 后端自动化测试
+docker/                容器配置与示例数据初始化
 ```
-
-运行 Text-to-SQL 测评并生成 Markdown 报告：
-
-```powershell
-uv run python -m chatbi.tools.evaluator --report reports/evaluation_report.md
-```
-
-终端会显示总体摘要，完整报告保存在 `reports/evaluation_report.md`。
-
-## 技术栈
-
-Python · FastAPI · OpenAI API · MySQL · ChromaDB · LangChain · React · TypeScript
-
-## 说明
-
-本项目参考了 [Vanna](https://github.com/vanna-ai/vanna) 与 [Dataherald](https://github.com/Dataherald/dataherald) 等开源 Text-to-SQL 项目的 README 组织方式，重点保留项目定位、核心能力、快速开始和安全提示。
