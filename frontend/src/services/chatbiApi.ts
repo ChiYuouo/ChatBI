@@ -83,7 +83,14 @@ const TOKEN_KEY = 'chatbi_token';
 
 export interface LoginResult {
   token: string;
-  user: { user_id: string; username: string; role: string; region: string | null };
+  user: AuthUser;
+}
+
+export interface AuthUser {
+  user_id: string;
+  username: string;
+  role: 'pending' | 'admin' | 'finance' | 'sales';
+  region: string | null;
 }
 
 /** 登录已过期（后端 401），token 已被清除，需要回到登录页 */
@@ -157,6 +164,35 @@ async function authedFetch(url: string, options: RequestInit = {}): Promise<Resp
     throw new UnauthorizedError();
   }
   return response;
+}
+
+export async function fetchCurrentUser(): Promise<AuthUser> {
+  const response = await authedFetch(`${getApiBaseUrl()}/api/v1/me`);
+  if (!response.ok) throw new Error(await readErrorMessage(response));
+  return response.json();
+}
+
+export async function listUsers(): Promise<AuthUser[]> {
+  const response = await authedFetch(`${getApiBaseUrl()}/api/v1/users`);
+  if (!response.ok) throw new Error(await readErrorMessage(response));
+  return response.json();
+}
+
+export async function authorizeUser(
+  userId: string,
+  role: AuthUser['role'],
+  region: string | null
+): Promise<AuthUser> {
+  const response = await authedFetch(
+    `${getApiBaseUrl()}/api/v1/users/${encodeURIComponent(userId)}/authorization`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role, region }),
+    }
+  );
+  if (!response.ok) throw new Error(await readErrorMessage(response));
+  return response.json();
 }
 
 /* ==================== 会话标识 ==================== */

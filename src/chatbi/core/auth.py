@@ -135,6 +135,10 @@ class UsernameAlreadyExistsError(ValueError):
     """用户名已被注册。"""
 
 
+class UserNotFoundError(ValueError):
+    """目标用户不存在。"""
+
+
 class UserStore:
     """SQLite 用户存储。每次操作独立连接，与会话存储相同的并发策略。"""
 
@@ -255,6 +259,45 @@ class UserStore:
             return None
         return self._row_to_user(row)
 
+    def list_users(self) -> list[AuthUser]:
+        """列出可管理的账号，不读取或返回密码哈希。"""
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT user_id, username, role, region, enabled FROM sys_user "
+                "WHERE enabled = 1 ORDER BY CASE WHEN role = 'pending' THEN 0 ELSE 1 END, created_at, username"
+            ).fetchall()
+            return [user for row in rows if (user := self._row_to_user(row)) is not None]
+        finally:
+            conn.close()
+
+    def set_authorization(self, user_id: str, role: str, region: str | None) -> AuthUser:
+        """管理员分配权限；所有规则在服务端校验。"""
+        if role not in {"pending", "admin", "finance", "sales"}:
+            raise ValueError("无效的角色")
+        normalized_region = (region or "").strip() or None
+        if role == "sales":
+            if not normalized_region or len(normalized_region) > 50:
+                raise ValueError("销售角色必须填写 1～50 字的区域")
+        elif normalized_region is not None:
+            raise ValueError("只有销售角色可以设置区域")
+
+        with self._write_lock:
+            conn = self._connect()
+            try:
+                with conn:
+                    cursor = conn.execute(
+                        "UPDATE sys_user SET role = ?, region = ? WHERE user_id = ? AND enabled = 1",
+                        (role, normalized_region, user_id),
+                    )
+                    if cursor.rowcount == 0:
+                        raise UserNotFoundError("用户不存在")
+            finally:
+                conn.close()
+        user = self.get(user_id)
+        assert user is not None
+        return user
+
 
 @lru_cache(maxsize=1)
 def get_user_store() -> UserStore:
@@ -266,6 +309,7 @@ __all__ = [
     "AuthUser",
     "UserStore",
     "UsernameAlreadyExistsError",
+    "UserNotFoundError",
     "get_user_store",
     "create_token",
     "decode_token",

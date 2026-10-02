@@ -22,10 +22,11 @@ from chatbi.api.schemas import (
     HealthResponse,
     LoginRequest,
     RegisterRequest,
+    AuthorizeUserRequest,
     QueryRequest,
     QuerySuccessResponse,
 )
-from chatbi.core.auth import UsernameAlreadyExistsError, create_token, get_user_store
+from chatbi.core.auth import UserNotFoundError, UsernameAlreadyExistsError, create_token, get_user_store
 from chatbi.core.config import APP_CONFIG
 from chatbi.core.security import UserContext
 
@@ -89,6 +90,50 @@ def register(payload: RegisterRequest) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"message": "注册成功，请等待管理员授权"}
+
+
+def _user_response(user) -> dict:
+    return {
+        "user_id": user.user_id,
+        "username": user.username,
+        "role": user.role,
+        "region": user.region,
+    }
+
+
+def _require_admin(request: Request) -> UserContext:
+    current_user = _build_user_context(request)
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="仅管理员可以管理用户授权")
+    return current_user
+
+
+@router.get("/api/v1/me", tags=["系统"], summary="当前用户")
+def current_user(request: Request) -> dict:
+    user = get_user_store().get(_build_user_context(request).user_id)
+    if user is None:
+        raise HTTPException(status_code=401, detail="用户不存在")
+    return _user_response(user)
+
+
+@router.get("/api/v1/users", tags=["系统"], summary="用户列表（管理员）")
+def list_users(request: Request) -> list[dict]:
+    _require_admin(request)
+    return [_user_response(user) for user in get_user_store().list_users()]
+
+
+@router.patch("/api/v1/users/{user_id}/authorization", tags=["系统"], summary="分配用户角色和区域（管理员）")
+def authorize_user(user_id: str, payload: AuthorizeUserRequest, request: Request) -> dict:
+    admin = _require_admin(request)
+    if user_id == admin.user_id:
+        raise HTTPException(status_code=400, detail="不能修改自己的角色")
+    try:
+        user = get_user_store().set_authorization(user_id, payload.role, payload.region)
+    except UserNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _user_response(user)
 
 
 @router.post(

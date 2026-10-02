@@ -1,6 +1,6 @@
 import React from 'react';
 import { Button, Tooltip, Popconfirm } from 'antd';
-import { PlusOutlined, DeleteOutlined, MessageOutlined, AppstoreOutlined, DatabaseOutlined } from '@ant-design/icons';
+import { PlusOutlined, DeleteOutlined, MessageOutlined, AppstoreOutlined, DatabaseOutlined, TeamOutlined } from '@ant-design/icons';
 import { SessionSummary } from '../services/chatbiApi';
 
 interface SessionSidebarProps {
@@ -9,6 +9,9 @@ interface SessionSidebarProps {
   onSelect: (sessionId: string) => void;
   onDelete: (sessionId: string) => void;
   onNewSession: () => void;
+  isAdmin: boolean;
+  view: 'analysis' | 'users';
+  onViewChange: (view: 'analysis' | 'users') => void;
 }
 
 /** 格式化「最近活动」时间为易读的相对/简短形式 */
@@ -30,6 +33,9 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
   onSelect,
   onDelete,
   onNewSession,
+  isAdmin,
+  view,
+  onViewChange,
 }) => {
   return (
     <aside className="session-sidebar">
@@ -38,7 +44,12 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
         <div><strong>ChatBI</strong><span>DATA WORKSPACE</span></div>
       </div>
       <div className="sidebar-section-label">工作空间</div>
-      <div className="sidebar-nav-active"><AppstoreOutlined /> 智能分析</div>
+      <button className={`sidebar-nav-item${view === 'analysis' ? ' sidebar-nav-active' : ''}`} onClick={() => onViewChange('analysis')}>
+        <AppstoreOutlined /> 智能分析
+      </button>
+      {isAdmin && <button className={`sidebar-nav-item${view === 'users' ? ' sidebar-nav-active' : ''}`} onClick={() => onViewChange('users')}>
+        <TeamOutlined /> 用户授权
+      </button>}
       <div className="sidebar-section-label sidebar-history-label">最近会话</div>
       <Button
         block

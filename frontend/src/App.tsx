@@ -4,6 +4,7 @@ import zhCN from 'antd/locale/zh_CN';
 import { XProvider } from '@ant-design/x';
 import { Header } from './components/Header';
 import { LoginPage } from './components/LoginPage';
+import { UserAuthorizationPage } from './components/UserAuthorizationPage';
 import { SessionSidebar } from './components/SessionSidebar';
 import { QueryInputBar } from './components/QueryInputBar';
 import { QueryCard } from './components/QueryCard';
@@ -31,6 +32,9 @@ import {
   resetSessionId,
   setActiveSessionId,
   SessionSummary,
+  AuthUser,
+  fetchCurrentUser,
+  UnauthorizedError,
 } from './services/chatbiApi';
 import './App.css';
 
@@ -146,9 +150,11 @@ interface MainContentProps {
   onUnauthorized: () => void;
   /** 退出登录 */
   onLogout: () => void;
+  user: AuthUser;
 }
 
-export const MainContent: React.FC<MainContentProps> = ({ onUnauthorized, onLogout }) => {
+export const MainContent: React.FC<MainContentProps> = ({ onUnauthorized, onLogout, user }) => {
+  const [view, setView] = useState<'analysis' | 'users'>('analysis');
   const [inputQuestion, setInputQuestion] = useState('');
   const [mode, setMode] = useState<QueryMode>('query');
   const [loading, setLoading] = useState(false);
@@ -670,6 +676,9 @@ export const MainContent: React.FC<MainContentProps> = ({ onUnauthorized, onLogo
         onSelect={handleSelectSession}
         onDelete={handleDeleteSession}
         onNewSession={handleNewSession}
+        isAdmin={user.role === 'admin'}
+        view={view}
+        onViewChange={setView}
       />
       <div className="workspace-shell">
         <Header
@@ -677,7 +686,11 @@ export const MainContent: React.FC<MainContentProps> = ({ onUnauthorized, onLogo
           onRefreshHealth={loadHealth}
           historyCount={feed.length}
           onLogout={onLogout}
+          view={view}
         />
+        {view === 'users' && user.role === 'admin' ? (
+          <UserAuthorizationPage currentUserId={user.user_id} onUnauthorized={onUnauthorized} />
+        ) : (
         <main className="chatbi-main-container">
         <div className="workspace-heading">
           <div>
@@ -730,6 +743,7 @@ export const MainContent: React.FC<MainContentProps> = ({ onUnauthorized, onLogo
           )}
         </div>
         </main>
+        )}
       </div>
     </div>
   );
@@ -737,20 +751,35 @@ export const MainContent: React.FC<MainContentProps> = ({ onUnauthorized, onLogo
 
 /** 登录门控：未登录只显示登录页，登录后进入工作台 */
 const AuthGate: React.FC = () => {
-  const [authed, setAuthed] = useState(() => !!getToken());
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [checking, setChecking] = useState(() => !!getToken());
 
-  if (!authed) {
-    return <LoginPage onLogin={() => setAuthed(true)} />;
+  useEffect(() => {
+    if (!getToken()) return;
+    fetchCurrentUser()
+      .then(setUser)
+      .catch((err) => {
+        if (err instanceof UnauthorizedError) clearToken();
+        else message.error(err instanceof Error ? err.message : '无法确认登录状态');
+      })
+      .finally(() => setChecking(false));
+  }, []);
+
+  if (checking) return <div className="auth-loading">正在确认登录状态…</div>;
+
+  if (!user) {
+    return <LoginPage onLogin={setUser} />;
   }
 
   return (
     <MainContent
-      onUnauthorized={() => setAuthed(false)}
+      user={user}
+      onUnauthorized={() => setUser(null)}
       onLogout={() => {
         // 退出同时清掉会话标识与对话记录，换账号后从新开始
         clearToken();
         clearPersistedFeed();
-        setAuthed(false);
+        setUser(null);
       }}
     />
   );

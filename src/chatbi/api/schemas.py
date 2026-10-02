@@ -75,6 +75,13 @@ class RegisterRequest(BaseModel):
     password: str = Field(..., min_length=1, description="密码")
 
 
+class AuthorizeUserRequest(BaseModel):
+    """管理员设置账号的角色与销售区域。"""
+
+    role: str = Field(..., description="pending、admin、finance 或 sales")
+    region: str | None = Field(default=None, description="销售角色的区域")
+
+
 class HealthResponse(BaseModel):
     """健康检查响应。"""
 

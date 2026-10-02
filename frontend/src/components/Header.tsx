@@ -12,6 +12,7 @@ interface HeaderProps {
   historyCount: number;
   /** 退出登录 */
   onLogout: () => void;
+  view: 'analysis' | 'users';
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -19,6 +20,7 @@ export const Header: React.FC<HeaderProps> = ({
   onRefreshHealth,
   historyCount,
   onLogout,
+  view,
 }) => {
   const getHealthBadge = () => {
     if (health.status === 'checking') {
@@ -52,11 +54,11 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="header-location">
         <span>工作台</span>
         <span className="header-location-separator">/</span>
-        <strong>智能分析</strong>
+        <strong>{view === 'users' ? '用户授权' : '智能分析'}</strong>
       </div>
       <div className="header-actions">
         {getHealthBadge()}
-        <span className="header-activity">本页 {historyCount} 条记录</span>
+        {view === 'analysis' && <span className="header-activity">本页 {historyCount} 条记录</span>}
         <span className="header-divider" />
         <div className="account-avatar" aria-label="当前账户">我</div>
         <Tooltip title="退出登录">

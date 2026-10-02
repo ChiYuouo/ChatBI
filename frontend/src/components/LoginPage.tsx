@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
 import { Card, Form, Input, Button, Typography, Alert } from 'antd';
 import { UserOutlined, LockOutlined, DatabaseOutlined } from '@ant-design/icons';
-import { login, register, saveToken } from '../services/chatbiApi';
+import { AuthUser, login, register, saveToken } from '../services/chatbiApi';
 
 const { Title, Text } = Typography;
 
 interface LoginPageProps {
-  onLogin: () => void;
+  onLogin: (user: AuthUser) => void;
 }
 
 interface LoginFormValues {
@@ -32,7 +32,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
       } else {
         const result = await login(values.username, values.password);
         saveToken(result.token);
-        onLogin();
+        onLogin(result.user);
       }
     } catch (err: any) {
       setError(err.message || (mode === 'login' ? '登录失败' : '注册失败'));

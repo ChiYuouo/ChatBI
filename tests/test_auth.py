@@ -253,3 +253,68 @@ def test_request_models_no_longer_have_identity_fields():
     for model in (QueryRequest, AnalyzeRequest):
         for field in ("user_id", "user_role", "user_region"):
             assert field not in model.model_fields
+
+
+def test_admin_can_authorize_registered_user_and_user_can_login(client, anonymous_client):
+    anonymous_client.post(
+        "/api/v1/register", json={"username": "new_sales", "password": "secret123"}
+    )
+    users = client.get("/api/v1/users")
+    assert users.status_code == 200
+    target = next(user for user in users.json() if user["username"] == "new_sales")
+    assert target["role"] == "pending"
+    assert "password_hash" not in target
+
+    updated = client.patch(
+        f"/api/v1/users/{target['user_id']}/authorization",
+        json={"role": "sales", "region": " 欧洲 "},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["region"] == "欧洲"
+    login_response = anonymous_client.post(
+        "/api/v1/login", json={"username": "new_sales", "password": "secret123"}
+    )
+    assert login_response.status_code == 200
+    assert login_response.json()["user"]["role"] == "sales"
+
+
+def test_only_admin_can_manage_authorization(anonymous_client):
+    sales = AuthUser(user_id="u_sales", username="sales", role="sales", region="欧洲")
+    headers = {"Authorization": f"Bearer {create_token(sales)}"}
+    assert anonymous_client.get("/api/v1/users", headers=headers).status_code == 403
+    assert anonymous_client.patch(
+        "/api/v1/users/alice/authorization",
+        json={"role": "admin", "region": None}, headers=headers,
+    ).status_code == 403
+    assert anonymous_client.get("/api/v1/users").status_code == 401
+
+
+def test_authorization_validates_region_and_prevents_self_change(client, auth_store):
+    for payload in (
+        {"role": "sales", "region": None},
+        {"role": "finance", "region": "欧洲"},
+        {"role": "unknown", "region": None},
+    ):
+        assert client.patch(
+            "/api/v1/users/alice/authorization", json=payload,
+        ).status_code == 400
+    assert client.patch(
+        "/api/v1/users/test_admin/authorization",
+        json={"role": "pending", "region": None},
+    ).status_code == 400
+    assert client.patch(
+        "/api/v1/users/missing/authorization",
+        json={"role": "finance", "region": None},
+    ).status_code == 404
+    assert auth_store.get("alice").role == "sales"
+
+
+def test_authorization_change_takes_effect_for_existing_token(anonymous_client, client):
+    sales = AuthUser(user_id="u_sales", username="sales", role="sales", region="欧洲")
+    headers = {"Authorization": f"Bearer {create_token(sales)}"}
+    assert anonymous_client.get("/api/v1/me", headers=headers).json()["role"] == "sales"
+    assert client.patch(
+        "/api/v1/users/u_sales/authorization",
+        json={"role": "pending", "region": None},
+    ).status_code == 200
+    assert anonymous_client.get("/api/v1/me", headers=headers).status_code == 401
