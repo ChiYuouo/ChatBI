@@ -82,7 +82,7 @@ SQL 校验当前仅支持演示库的五张制造业表、明确的字段和常�
 
 目前尚未完成租户/数据源授权、只读数据库账户切换和执行预算。真实 MySQL 集成验证仍待完成，离线测试通过不能替代这些边界。
 
-后端离线回归使用 `uv run pytest -q`，测试会固定功能开关并使用临时账户/会话存储，不调用真实模型或业务数据库。实施进度见 [企业改造规划](docs/enterprise-transformation-plan.md)。
+后端离线回归使用 `uv run pytest -q`，测试会固定功能开关并使用临时账户/会话存储，不调用真实模型或业务数据库。总体路线见 [企业改造规划](docs/enterprise-transformation-plan.md)，当前实施进度见 [第一阶段文档](docs/stages/phase-1-query-execution.md)。其他阶段文档从 [文档目录](docs/README.md) 进入。
 
 ## Text-to-SQL 评测
 
