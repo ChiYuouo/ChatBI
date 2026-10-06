@@ -3,6 +3,9 @@
 按项目约定，全程使用假 Provider，不依赖真实模型服务与数据库。
 """
 
+from chatbi.contracts.execution import QueryExecutionResult
+
+
 from types import SimpleNamespace
 
 from chatbi.analysis.analysis_service import AnalysisService
@@ -49,10 +52,8 @@ class FakeLLM:
 
 
 class FakeDB:
-    last_query_info = {"duration_ms": 5}
-
-    def execute(self, sql, user=None):
-        return ["region", "amt"], [("欧洲", 100), ("北美", 300)]
+    def execute_query(self, sql, user=None):
+        return QueryExecutionResult(sql, sql, "mysql_main", ["region", "amt"], [("欧洲", 100), ("北美", 300)], 5)
 
 
 class FakeParser:
@@ -96,7 +97,7 @@ HERMETIC_RUN_OPTIONS = {
 def collect_events(question="最近三个月利润为什么下降？"):
     service = AnalysisService(runtime_factory=build_fake_runtime_factory())
     return list(
-        service.run_stream_events(question, chatbi_run_options=HERMETIC_RUN_OPTIONS)
+        service.run_stream_events(question, security_context=UserContext.demo_admin(), chatbi_run_options=HERMETIC_RUN_OPTIONS)
     )
 
 
@@ -166,7 +167,7 @@ def test_analysis_service_degrades_when_decomposition_is_invalid():
         runtime_factory=build_fake_runtime_factory(BrokenLLM())
     )
     events = list(
-        service.run_stream_events("利润为什么下降？", chatbi_run_options=HERMETIC_RUN_OPTIONS)
+        service.run_stream_events("利润为什么下降？", security_context=UserContext.demo_admin(), chatbi_run_options=HERMETIC_RUN_OPTIONS)
     )
     error_event = dict(events)["error"]
 
@@ -179,7 +180,7 @@ def test_analysis_service_binds_llm_client_to_injected_runtime():
     llm = FakeLLM()
     service = AnalysisService(runtime_factory=build_fake_runtime_factory(llm))
     list(
-        service.run_stream_events("利润为什么下降？", chatbi_run_options=HERMETIC_RUN_OPTIONS)
+        service.run_stream_events("利润为什么下降？", security_context=UserContext.demo_admin(), chatbi_run_options=HERMETIC_RUN_OPTIONS)
     )
 
     # 拆解与报告都必须走注入的 LLM，避免链路里出现多个模型客户端
@@ -223,9 +224,9 @@ def _build_recording_service(captured_users):
     """构造一个能记录每个子步骤所用身份的 AnalysisService。"""
 
     class RecordingDB(FakeDB):
-        def execute(self, sql, user=None):
+        def execute_query(self, sql, user=None):
             captured_users.append(user)
-            return super().execute(sql, user)
+            return super().execute_query(sql, user)
 
     def recording_factory(app_config, source_id=None):
         runtime = build_fake_runtime_factory()(app_config, source_id=source_id)
@@ -248,8 +249,7 @@ def test_analysis_passes_user_context_to_substeps():
     list(
         service.run_stream_events(
             "最近三个月利润为什么下降？",
-            security_context=UserContext(user_id="alice", role="sales", region="欧洲"),
-            chatbi_run_options=HERMETIC_RUN_OPTIONS,
+            security_context=UserContext(user_id="alice", role="sales", region="欧洲"), chatbi_run_options=HERMETIC_RUN_OPTIONS,
         )
     )
 
@@ -258,15 +258,13 @@ def test_analysis_passes_user_context_to_substeps():
     assert all(user.region == "欧洲" for user in captured_users)
 
 
-def test_analysis_without_security_context_falls_back_to_demo_admin():
-    """不传身份时维持原有行为（demo_admin），保证向后兼容。"""
-    captured_users: list[UserContext | None] = []
+def test_analysis_without_security_context_is_rejected():
+    captured_users = []
     service = _build_recording_service(captured_users)
-
-    list(service.run_stream_events("最近三个月利润为什么下降？", chatbi_run_options=HERMETIC_RUN_OPTIONS))
-
-    assert captured_users
-    assert all(user is not None and user.user_id == "demo_admin" for user in captured_users)
+    events = list(service.run_stream_events("最近三个月利润为什么下降？", chatbi_run_options=HERMETIC_RUN_OPTIONS))
+    assert events[0][0] == "error"
+    assert events[0][1]["error_type"] == "security"
+    assert captured_users == []
 
 
 def test_analysis_service_persists_session_turn_when_session_id_given():
@@ -287,7 +285,7 @@ def test_analysis_service_persists_session_turn_when_session_id_given():
     events = list(
         service.run_stream_events(
             "最近三个月利润为什么下降？",
-            chatbi_run_options=HERMETIC_RUN_OPTIONS,
+            security_context=UserContext.demo_admin(), chatbi_run_options=HERMETIC_RUN_OPTIONS,
             session_id="sAnalyze",
         )
     )
@@ -317,7 +315,7 @@ def test_analysis_service_skips_persistence_without_session_id():
     events = list(
         service.run_stream_events(
             "最近三个月利润为什么下降？",
-            chatbi_run_options=HERMETIC_RUN_OPTIONS,
+            security_context=UserContext.demo_admin(), chatbi_run_options=HERMETIC_RUN_OPTIONS,
         )
     )
 

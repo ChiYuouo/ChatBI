@@ -18,6 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 from chatbi.infrastructure.database import DatabaseClient
+from chatbi.core.security import UserContext
 
 
 class Evaluator:
@@ -80,14 +81,14 @@ class Evaluator:
 
         # 2. 执行预期 SQL 获取基准结果
         try:
-            exp_columns, exp_results = self.db.execute(expected_sql)
+            exp_columns, exp_results = self.db.execute(expected_sql, user=UserContext.demo_admin())
         except Exception as e:
             result["error"] = f"预期 SQL 执行失败：{e}"
             return result
 
         # 3. 执行生成 SQL 获取结果
         try:
-            gen_columns, gen_results = self.db.execute(generated_sql)
+            gen_columns, gen_results = self.db.execute(generated_sql, user=UserContext.demo_admin())
         except Exception as e:
             result["error"] = f"生成 SQL 执行失败：{e}"
             result["detail"] = {

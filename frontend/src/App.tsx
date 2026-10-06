@@ -301,6 +301,7 @@ export const MainContent: React.FC<MainContentProps> = ({ onUnauthorized, onLogo
                       record: {
                         ...item.record,
                         columns: data.columns || [],
+                        sql: data.sql || item.record.sql,
                         rows: data.rows || [],
                         rowCount: data.row_count ?? (data.rows ? data.rows.length : 0),
                         formatted: data.formatted,

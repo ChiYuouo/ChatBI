@@ -27,7 +27,7 @@ from typing import Any, Generator
 
 from chatbi.bootstrap.runtime_factory import build_runtime
 from chatbi.core.config import APP_CONFIG, LLM_CONFIG
-from chatbi.core.security import SecurityError, UserContext
+from chatbi.core.security import QuerySecurityManager, SecurityError, UserContext
 from chatbi.infrastructure.database import QueryExecutionError
 from chatbi.infrastructure.session_store import SessionStore
 from chatbi.retrieval.indicator_knowledge import IndicatorKnowledge
@@ -58,6 +58,7 @@ class ChatBISystem:
         session_store: SessionStore | None = None,
         query_rewriter: QueryRewriter | None = None,
     ):
+        self.security = QuerySecurityManager()
         self.app_config = app_config or APP_CONFIG
         self.runtime_factory = runtime_factory
         self.runtime = runtime or self.runtime_factory(self.app_config)
@@ -165,6 +166,7 @@ class ChatBISystem:
         use_query_rewrite: bool | None = None,
     ) -> _PreparedQuery | None:
         """完成同步与流式查询共用的解析、知识检索和 Prompt 构造。"""
+        user_context = self.security.require_user(security_context)
         runtime = self._get_runtime(source_id)
         options = self._resolve_feature_options(
             {
@@ -177,18 +179,11 @@ class ChatBISystem:
                 "use_query_rewrite": use_query_rewrite,
             }
         )
-        user_context = security_context or UserContext.demo_admin()
 
         parsed = runtime.parser.parse(user_question)
         if not runtime.parser.validate(parsed):
             return None
 
-        detected_indicators, indicator_block = self._resolve_indicator_context(
-            user_question=user_question,
-            use_indicator_knowledge=options["use_indicator_knowledge"],
-            use_indicator_rag=options["use_indicator_rag"],
-            indicator_knowledge=runtime.indicator_knowledge,
-        )
         # 多轮上下文：只有传了 session_id 才读历史。
         # 未传时不触碰会话存储，行为与单轮查询完全一致。
         history = ""
@@ -213,6 +208,13 @@ class ChatBISystem:
                 context_history,
                 text_generator=generator,
             )
+
+        detected_indicators, indicator_block = self._resolve_indicator_context(
+            user_question=rewritten_question,
+            use_indicator_knowledge=options["use_indicator_knowledge"],
+            use_indicator_rag=options["use_indicator_rag"],
+            indicator_knowledge=runtime.indicator_knowledge,
+        )
 
         system_msg, prompt = build_prompt(
             rewritten_question,
@@ -263,6 +265,11 @@ class ChatBISystem:
         Returns:
             包含 SQL、结果或错误信息的字典
         """
+        try:
+            self.security.require_user(security_context)
+        except SecurityError as exc:
+            return {"success": False, "error": str(exc), "error_type": "security"}
+
         prepared = self._prepare_query(
             user_question=user_question,
             use_few_shot=use_few_shot,
@@ -320,8 +327,10 @@ class ChatBISystem:
 
         # 5. 执行 SQL
         try:
-            columns, results = runtime.db.execute(sql, user=user_context)
-            db_info = getattr(runtime.db, "last_query_info", {})
+            execution = runtime.db.execute_query(sql, user=user_context)
+            columns, results = execution.columns, execution.rows
+            db_info = execution.metadata
+            sql = execution.executed_sql
             formatted = runtime.formatter.format(columns, results)
             # 只在成功时记录本轮问答。失败的 SQL 不进历史，
             # 免得后续轮次被上一条错 SQL 带偏。
@@ -495,6 +504,12 @@ class ChatBISystem:
         以便上层（如 Agent 归因链路）在事件上附加 step_id 等上下文，
         或直接消费结构化结果。
         """
+        try:
+            self.security.require_user(security_context)
+        except SecurityError as exc:
+            yield "error", {"error": str(exc), "error_type": "security"}
+            return
+
         prepared = self._prepare_query(
             user_question=user_question,
             use_few_shot=use_few_shot,
@@ -568,8 +583,10 @@ class ChatBISystem:
 
         # 6. 执行 SQL
         try:
-            columns, results = runtime.db.execute(sql, user=user_context)
-            db_info = getattr(runtime.db, "last_query_info", {})
+            execution = runtime.db.execute_query(sql, user=user_context)
+            columns, results = execution.columns, execution.rows
+            db_info = execution.metadata
+            sql = execution.executed_sql
             rows_dict = [dict(zip(columns, row)) for row in results]
             # 只在成功时记录本轮问答，与 run 保持一致
             if session_id:

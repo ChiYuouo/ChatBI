@@ -4,8 +4,21 @@
 它自带一个有效的 admin token，避免每个测试重复登录。
 """
 
-import pytest
+import os
 import sqlite3
+import tempfile
+from pathlib import Path
+
+# 在导入 API 单例前固定开关及临时存储，不能让机器 .env 决定测试行为。
+_test_data = tempfile.TemporaryDirectory(prefix="chatbi-tests-")
+os.environ["SESSION_DB_PATH"] = str(Path(_test_data.name) / "sessions.db")
+os.environ["USERS_DB_PATH"] = str(Path(_test_data.name) / "users.db")
+for _feature in ("FEW_SHOT", "RULES", "GUARDS", "INDICATOR_KNOWLEDGE", "SCHEMA_LINKING", "INDICATOR_RAG"):
+    os.environ[f"FEATURE_{_feature}"] = "false"
+os.environ["FEATURE_QUERY_REWRITE"] = "true"
+os.environ.setdefault("OPENAI_API_KEY", "offline-test-key")
+
+import pytest
 from fastapi.testclient import TestClient
 
 from chatbi.api import dependencies, routes

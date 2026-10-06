@@ -329,6 +329,7 @@ class StepExecutor:
     # 只有「SQL 本身写错」才值得带错误上下文重写。
     # 权限 / 超时 / 连接 / 安全策略类失败重试没有意义。
     _REPAIRABLE_ERROR_TYPES = frozenset({"sql_syntax", "execution_error"})
+    _TRANSIENT_ERROR_TYPES = frozenset({"connection_error"})
 
     def __init__(
         self,
@@ -349,8 +350,7 @@ class StepExecutor:
             "use_indicator_knowledge": True,
         }
         # 归因链路的子步骤必须以发起请求的用户身份执行。
-        # 安全校验强制在 DatabaseClient.execute() 里，但身份要靠这里传下去 ——
-        # 不传的话子步骤会落到 demo_admin（admin，零限制），整条归因链路绕过隔离。
+        # 缺身份由查询入口拒绝；修复重试始终保持同一请求身份。
         self.security_context = security_context
         self.step_runner = step_runner or self._run_with_chatbi
         # 记录是否为外部注入的自定义执行器。
@@ -737,8 +737,7 @@ class StepExecutor:
         - SQL 本身写错（sql_syntax / execution_error）：单纯重发同一个问题没有意义，
           模型多半会犯同样的错。这类失败要带上「上一次生成的 SQL + 数据库报错」
           一起重问，模型看到具体症状才有机会改对。
-        - 其他失败（连接超时、锁等待等瞬时故障）：沿用原问题重试即可，
-          瞬时故障重试本身就常能成功。
+        - 连接失败：有限次数原样重试。安全、权限、查询超时与未知错误直接结束。
 
         max_retries=0 时只执行一次，行为与重构前一致。
         """
@@ -781,6 +780,10 @@ class StepExecutor:
                 return normalized
 
             last_result = normalized
+            error_type = (normalized.error_type or "").removeprefix("database_")
+            if error_type not in self._REPAIRABLE_ERROR_TYPES | self._TRANSIENT_ERROR_TYPES:
+                # 安全/授权/预算/超时等终止型错误不能通过重新生成 SQL 绕过。
+                return normalized
 
         assert last_result is not None
         return last_result

@@ -4,6 +4,9 @@
 按项目约定，全程使用假 Provider，不依赖真实模型服务与数据库。
 """
 
+from chatbi.contracts.execution import QueryExecutionResult
+
+
 import os
 import tempfile
 from types import SimpleNamespace
@@ -12,6 +15,7 @@ import pytest
 from pydantic import ValidationError
 
 from chatbi.api.schemas import QueryRequest
+from chatbi.core.security import UserContext
 from chatbi.infrastructure.session_store import SessionStore
 from chatbi.services.chatbi_service import ChatBISystem
 from chatbi.text2sql.prompt_builder import build_prompt
@@ -37,10 +41,8 @@ class CapturingLLM:
 
 
 class FakeDB:
-    last_query_info = {"duration_ms": 1}
-
-    def execute(self, sql, user=None):
-        return ["region"], [("欧洲",)]
+    def execute_query(self, sql, user=None):
+        return QueryExecutionResult(sql, sql, "mysql_main", ["region"], [("欧洲",)], 1)
 
 
 class FakeParser:
@@ -58,6 +60,8 @@ class FakeFormatter:
 
 # 关闭所有会触发向量检索 / 网络调用的开关，保持测试无外部依赖
 HERMETIC_OPTIONS = {
+    "security_context": UserContext.demo_admin(),
+    "use_query_rewrite": True,
     "use_few_shot": False,
     "use_rules": False,
     "use_guards": False,
@@ -385,6 +389,25 @@ def test_complete_question_does_not_pass_previous_time_range_to_sql_prompt():
     assert "上个月" not in llm.prompts[1]
 
 
+def test_indicator_lookup_uses_rewritten_question():
+    rewriter = QueryRewriter(lambda system_msg, prompt: "2026年2月各区域销售收入")
+    system, _, _ = build_system(query_rewriter=rewriter)
+    system.run("各区域收入是多少", session_id="s1", **HERMETIC_OPTIONS)
+    searched = []
+
+    class RecordingIndicators:
+        def get_indicator_context(self, question):
+            searched.append(question)
+            return {"detected_indicators": ["收入"], "indicator_block": "收入定义"}
+
+    system.indicator_knowledge = RecordingIndicators()
+    result = system.run("那2月呢？", session_id="s1",
+        **{**HERMETIC_OPTIONS, "use_indicator_knowledge": True})
+    assert result["success"]
+    assert searched == ["2026年2月各区域销售收入"]
+    assert result["metadata"]["detected_indicators"] == ["收入"]
+
+
 def test_rewrite_can_be_disabled_per_request():
     rewriter = QueryRewriter(lambda system_msg, prompt: "2026年2月各区域的订单量")
     system, llm, _ = build_system(query_rewriter=rewriter)
@@ -393,8 +416,7 @@ def test_rewrite_can_be_disabled_per_request():
     system.run(
         user_question="那2月呢？",
         session_id="s1",
-        use_query_rewrite=False,
-        **HERMETIC_OPTIONS,
+        **{**HERMETIC_OPTIONS, "use_query_rewrite": False},
     )
 
     assert "2026年2月各区域的订单量" not in llm.prompts[1]

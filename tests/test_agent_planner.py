@@ -326,6 +326,7 @@ def test_step_executor_retries_failed_step_and_records_result_reference():
                 return {
                     "success": False,
                     "error": "数据库连接超时",
+                    "error_type": "connection_error",
                     "formatted": "第一次执行失败",
                 }
 

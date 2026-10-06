@@ -174,7 +174,7 @@ def query_chatbi(payload: QueryRequest, request: Request) -> QuerySuccessRespons
             status_code = 400
         elif error_type == "llm":
             status_code = 502
-        elif error_type == "security":
+        elif error_type in {"security", "database_permission_denied"}:
             status_code = 403
         elif error_type == "database_sql_syntax":
             status_code = 422
@@ -266,7 +266,7 @@ def clear_session(session_id: str, request: Request) -> dict:
     旧查询记录（含 SQL）会一直留在磁盘上直到过期清理，
     用户以为清了其实还在。
     """
-    user_context = getattr(request.state, "user_context", UserContext.demo_admin())
+    user_context = _build_user_context(request)
     deleted = system.session_store.delete_session(session_id, user_context.user_id)
     logger.info(
         "会话历史清除: session=%s user=%s deleted=%s",

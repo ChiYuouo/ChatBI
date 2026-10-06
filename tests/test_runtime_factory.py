@@ -1,3 +1,4 @@
+from chatbi.contracts.execution import QueryExecutionResult
 from types import SimpleNamespace
 
 def test_build_runtime_uses_requested_database_source(monkeypatch):
@@ -63,12 +64,10 @@ def test_chatbi_system_run_uses_runtime_factory_for_source_id():
             return "SELECT 1"
 
     class FakeDB:
-        last_query_info = {"duration_ms": 12.5, "slow_query": False, "explain_plan": []}
-
-        def execute(self, sql: str, user=None):
+        def execute_query(self, sql: str, user=None):
             captured["sql"] = sql
             captured["user"] = user
-            return ["value"], [(1,)]
+            return QueryExecutionResult(sql, sql, "finance_pg", ["value"], [(1,)], 12.5)
 
     class FakeFormatter:
         def format(self, columns, rows) -> str:

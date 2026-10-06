@@ -1,3 +1,4 @@
+from chatbi.contracts.execution import QueryExecutionResult
 import pymysql
 import pytest
 
@@ -85,7 +86,7 @@ def test_database_client_classifies_sql_syntax_errors():
     client = DatabaseClient(connection_factory=lambda: FakeConnection(SyntaxErrorCursor()))
 
     with pytest.raises(QueryExecutionError) as exc_info:
-        client.execute("SELECT broken FROM sales_orders")
+        client.execute("SELECT order_id FROM sales_orders", user=UserContext.demo_admin())
 
     assert exc_info.value.error_type == "sql_syntax"
     assert exc_info.value.metadata["error_code"] == 1064
@@ -102,7 +103,7 @@ def test_database_client_classifies_connection_factory_errors():
     )
 
     with pytest.raises(QueryExecutionError) as exc_info:
-        client.execute("SELECT * FROM sales_orders")
+        client.execute("SELECT * FROM sales_orders", user=UserContext.demo_admin())
 
     assert exc_info.value.error_type == "permission_denied"
     assert exc_info.value.metadata["error_code"] == 1045
@@ -116,23 +117,23 @@ def test_database_client_records_explain_for_slow_queries():
         time_fn=lambda: next(time_points),
     )
 
-    columns, rows = client.execute(
+    result = client.execute_query(
         "SELECT region, SUM(net_amount) AS revenue FROM sales_orders GROUP BY region",
         user=UserContext(user_id="u_admin", role="admin"),
     )
 
-    assert columns == ["region", "revenue"]
-    assert rows == [("华东大区", 1250000)]
-    assert client.last_query_info["duration_ms"] == 250.0
-    assert client.last_query_info["slow_query"] is True
-    assert client.last_query_info["explain_plan"][0]["table"] == "sales_orders"
+    assert result.columns == ["region", "revenue"]
+    assert result.rows == [("华东大区", 1250000)]
+    assert result.metadata["duration_ms"] == 250.0
+    assert result.metadata["slow_query"] is True
+    assert result.metadata["explain_plan"][0]["table"] == "sales_orders"
 
 
 def test_database_client_classifies_read_timeout_as_query_timeout():
     client = DatabaseClient(connection_factory=lambda: FakeConnection(TimedOutCursor()))
 
     with pytest.raises(QueryExecutionError) as exc_info:
-        client.execute("SELECT SLEEP(2)")
+        client.execute("SELECT 1", user=UserContext.demo_admin())
 
     assert exc_info.value.error_type == "query_timeout"
     assert exc_info.value.metadata["error_code"] == 2013
@@ -176,7 +177,7 @@ def test_chatbi_system_returns_granular_database_error_type_for_timeout():
             return "SELECT * FROM sales_orders"
 
     class FakeDB:
-        def execute(self, sql: str, user=None):
+        def execute_query(self, sql: str, user=None):
             raise QueryExecutionError(
                 "query_timeout",
                 "SQL 执行超时，请缩小时间范围后重试",
@@ -190,6 +191,7 @@ def test_chatbi_system_returns_granular_database_error_type_for_timeout():
 
     result = system.run(
         "查看最近 12 个月订单明细",
+        security_context=UserContext.demo_admin(),
         # 全局功能开关默认值改为「全关 + .env 显式开启」后，
         # 不带选项的测试会实际走 ChromaDB 检索与 embedding 调用 ——
         # 测试必须显式关掉，保持与真实模型服务隔离。

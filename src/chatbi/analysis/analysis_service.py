@@ -27,7 +27,7 @@ from chatbi.analysis.query_decomposer import QueryDecomposer
 from chatbi.analysis.report_generator import ReportGenerator
 from chatbi.bootstrap.runtime_factory import build_runtime
 from chatbi.core.config import APP_CONFIG
-from chatbi.core.security import UserContext
+from chatbi.core.security import QuerySecurityManager, SecurityError, UserContext
 from chatbi.services.chatbi_service import ChatBISystem
 
 logger = logging.getLogger("chatbi.analysis")
@@ -131,7 +131,11 @@ class AnalysisService:
             yield "error", {"error": "输入问题为空", "error_type": "validation"}
             return
 
-        user_context = security_context or UserContext.demo_admin()
+        try:
+            user_context = QuerySecurityManager().require_user(security_context)
+        except SecurityError as exc:
+            yield "error", {"error": str(exc), "error_type": "security"}
+            return
         run_options = chatbi_run_options or {
             "use_schema_linking": True,
             "use_indicator_rag": True,
@@ -181,8 +185,7 @@ class AnalysisService:
             chatbi_run_options=run_options,
             failure_policy="skip",
             max_retries=2,
-            # 把请求者的身份传下去：行级过滤与脱敏都在 DatabaseClient 里按身份执行，
-            # 不传的话子步骤会以 demo_admin（admin）身份跑完整条归因链路。
+            # 每次子步骤及 SQL 修复都沿用请求身份，统一执行器再次校验。
             security_context=user_context,
         )
         step_results: list[StepExecutionResult] = []

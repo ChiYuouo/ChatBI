@@ -13,6 +13,7 @@ dependencies = [
     "pyjwt>=2.14.0",
     "pymysql>=1.2.0",
     "python-dotenv>=1.2.2",
+    "sqlglot>=29,<30",
     "uvicorn>=0.52.1",
 ]
 

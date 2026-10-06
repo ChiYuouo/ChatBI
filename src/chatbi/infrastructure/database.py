@@ -16,6 +16,8 @@ import pymysql
 
 from chatbi.core.config import APP_CONFIG, DB_RUNTIME_CONFIG, get_database_source_config
 from chatbi.core.security import QuerySecurityManager, UserContext
+from chatbi.contracts.execution import ExecutionContext, QueryExecutionResult
+from chatbi.execution.query_executor import QueryExecutor
 
 logger = logging.getLogger("chatbi.database")
 
@@ -115,7 +117,7 @@ class DatabaseClient:
         )
         self.connection_factory = connection_factory
         self.connection_pool = connection_pool
-        self.last_query_info: dict[str, Any] = {}
+        self.executor = QueryExecutor(self, self.security)
 
         if self.connection_factory is None and self.connection_pool is None:
             self.connection_pool = DatabaseConnectionPool(
@@ -139,8 +141,16 @@ class DatabaseClient:
         Returns:
             (列名列表, 结果行列表)
         """
-        user_context = user or UserContext.demo_admin()
-        secured_sql = self.security.secure_sql(sql, user_context)
+        result = self.execute_query(sql, user)
+        return result.columns, result.rows
+
+    def execute_query(self, sql: str, user: UserContext | None = None) -> QueryExecutionResult:
+        """返回独立执行结果；兼容 execute 的二元组接口也经过相同安全入口。"""
+        return self.executor.execute(sql, user)
+
+    def _execute_secured(
+        self, input_sql: str, secured_sql: str, context: ExecutionContext,
+    ) -> QueryExecutionResult:
         started_at = self.time_fn()
         conn = None
         try:
@@ -151,28 +161,19 @@ class DatabaseClient:
                 results = cursor.fetchall()
                 duration_ms = round((self.time_fn() - started_at) * 1000, 2)
                 explain_plan = self._explain(cursor, secured_sql, duration_ms)
-                self.last_query_info = {
-                    "sql": secured_sql,
-                    "duration_ms": duration_ms,
-                    "slow_query": bool(explain_plan),
-                    "explain_plan": explain_plan,
-                }
                 if explain_plan:
                     logger.warning(
-                        "Slow query detected: duration_ms=%s sql=%s",
+                        "Slow query detected: duration_ms=%s source_id=%s",
                         duration_ms,
-                        secured_sql,
+                        context.source_id,
                     )
-                _, masked_rows = self.security.mask_result(columns, results, user_context)
-                return columns, masked_rows
+                _, masked_rows = self.security.mask_result(columns, results, context.to_user())
+                return QueryExecutionResult(
+                    input_sql=input_sql, executed_sql=secured_sql, source_id=context.source_id,
+                    columns=columns, rows=masked_rows, duration_ms=duration_ms, explain_plan=explain_plan,
+                )
         except (pymysql.MySQLError, OSError) as exc:
             duration_ms = round((self.time_fn() - started_at) * 1000, 2)
-            self.last_query_info = {
-                "sql": secured_sql,
-                "duration_ms": duration_ms,
-                "slow_query": False,
-                "explain_plan": [],
-            }
             raise self._translate_db_error(exc, secured_sql, duration_ms) from exc
         finally:
             if conn is not None:
@@ -245,16 +246,16 @@ class DatabaseClient:
         #   1054 字段不存在   1052 字段名有歧义   1146 表不存在
         _REPAIRABLE_SQL_CODES = {1064, 1055, 1056, 1054, 1052, 1146}
 
-        if isinstance(exc, pymysql.err.ProgrammingError) or error_code in _REPAIRABLE_SQL_CODES:
-            return QueryExecutionError(
-                "sql_syntax",
-                "SQL 语法错误，请检查字段、聚合和别名是否正确",
-                metadata,
-            )
         if error_code in {1044, 1045, 1142, 1143, 1227}:
             return QueryExecutionError(
                 "permission_denied",
                 "数据库拒绝执行该查询，请检查当前账号权限",
+                metadata,
+            )
+        if error_code in _REPAIRABLE_SQL_CODES:
+            return QueryExecutionError(
+                "sql_syntax",
+                "SQL 语法错误，请检查字段、聚合和别名是否正确",
                 metadata,
             )
         if error_code in {1205, 3024} or (

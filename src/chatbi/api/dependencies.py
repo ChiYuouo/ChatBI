@@ -2,14 +2,14 @@
 
 from typing import Any
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from chatbi.analysis.analysis_service import AnalysisService
 from chatbi.api.schemas import AnalyzeRequest, ErrorResponse, QueryRequest
 from chatbi.core.auth import decode_token, get_user_store
 from chatbi.core.config import APP_CONFIG
-from chatbi.core.security import UserContext
+from chatbi.core.security import QuerySecurityManager, SecurityError, UserContext
 from chatbi.services.chatbi_service import ChatBISystem
 
 system = ChatBISystem(app_config=APP_CONFIG)
@@ -31,7 +31,10 @@ def _build_user_context(request: Request) -> UserContext:
     请求体里曾经允许的 user_id / user_role / user_region 自报字段已删除 ——
     它们是伪造身份的入口，保留等于整个鉴权体系形同虚设。
     """
-    return getattr(request.state, "user_context", UserContext.demo_admin())
+    try:
+        return QuerySecurityManager().require_user(getattr(request.state, "user_context", None))
+    except SecurityError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
 
 
 def _resolve_query_options(payload: QueryRequest, app_config: dict) -> dict[str, bool]:
@@ -100,12 +103,10 @@ async def attach_user_context(request: Request, call_next):
     """解析 Bearer token，把用户身份挂到 request.state。
 
     身份只来自 token —— 请求体/请求头里任何自报的字段都不再被读取。
-    白名单路径（登录、健康检查、文档）不要求 token，state 上挂
-    demo_admin 占位身份，仅供后续代码安全访问字段。
+    白名单路径（登录、健康检查、文档）不要求 token，也不授予分析身份。
     """
     path = request.url.path
     if path in _PUBLIC_PATHS or path.startswith(_PUBLIC_PREFIXES):
-        request.state.user_context = UserContext.demo_admin()
         return await call_next(request)
 
     auth_header = request.headers.get("authorization", "")
