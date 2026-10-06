@@ -42,6 +42,7 @@ data/sessions.db*
 
 # Local user store (SQLite, contains password hashes)
 data/users.db*
+data/audit.db*
 
 # OS files
 .DS_Store

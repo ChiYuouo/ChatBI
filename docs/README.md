@@ -2,7 +2,7 @@
 
 ## 总规划
 
-[企业改造总规划](enterprise-transformation-plan.md) 记录产品定位、整体架构、模块职责、阶段顺序及总体完成标准。阶段实施记录通过链接进入，不在总规划里持续累积。
+[后端能力完善规划](enterprise-transformation-plan.md) 记录当前 Python 单后端方案、已实现能力和后续工作。历史实施记录保留在下方。
 
 ## 阶段文档
 

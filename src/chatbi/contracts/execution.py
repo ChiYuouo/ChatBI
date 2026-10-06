@@ -14,14 +14,15 @@ class ExecutionContext:
     role: str
     source_id: str
     regions: tuple[str, ...] = ()
+    trace_id: str | None = None
 
     @classmethod
     def from_user(cls, user: UserContext, source_id: str) -> ExecutionContext:
         regions = tuple(user.allowed_regions) or ((user.region,) if user.region else ())
-        return cls(user.user_id, user.role, source_id, regions)
+        return cls(user.user_id, user.role, source_id, regions, user.trace_id)
 
     def to_user(self) -> UserContext:
-        return UserContext(self.user_id, self.role, allowed_regions=list(self.regions))
+        return UserContext(self.user_id, self.role, allowed_regions=list(self.regions), trace_id=self.trace_id)
 
 
 @dataclass(frozen=True, slots=True)

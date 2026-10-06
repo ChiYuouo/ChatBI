@@ -1,6 +1,7 @@
 """API 依赖与请求上下文组装。"""
 
 from typing import Any
+from uuid import uuid4
 
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -103,9 +104,12 @@ async def attach_user_context(request: Request, call_next):
     身份只来自 token —— 请求体/请求头里任何自报的字段都不再被读取。
     白名单路径（登录、健康检查、文档）不要求 token，也不授予分析身份。
     """
+    request.state.trace_id = uuid4().hex
     path = request.url.path
     if path in _PUBLIC_PATHS or path.startswith(_PUBLIC_PREFIXES):
-        return await call_next(request)
+        response = await call_next(request)
+        response.headers["X-Trace-Id"] = request.state.trace_id
+        return response
 
     auth_header = request.headers.get("authorization", "")
     token = auth_header[7:].strip() if auth_header.lower().startswith("bearer ") else ""
@@ -119,11 +123,15 @@ async def attach_user_context(request: Request, call_next):
                 error_type="unauthorized",
                 metadata={"path": path},
             ).model_dump(),
+            headers={"X-Trace-Id": request.state.trace_id},
         )
 
     request.state.user_context = UserContext(
         user_id=stored_user.user_id,
         role=stored_user.role,
         region=stored_user.region,
+        trace_id=request.state.trace_id,
     )
-    return await call_next(request)
+    response = await call_next(request)
+    response.headers["X-Trace-Id"] = request.state.trace_id
+    return response

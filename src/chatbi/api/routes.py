@@ -29,6 +29,7 @@ from chatbi.api.schemas import (
 from chatbi.core.auth import UserNotFoundError, UsernameAlreadyExistsError, create_token, get_user_store
 from chatbi.core.config import APP_CONFIG
 from chatbi.core.security import UserContext
+from chatbi.infrastructure.audit_store import get_trace_events, record_event
 from chatbi.retrieval.index_manager import indexes_status
 
 logger = logging.getLogger("chatbi.api")
@@ -124,6 +125,23 @@ def _require_admin(request: Request) -> UserContext:
     return current_user
 
 
+def _audit_identity(user: UserContext, source_id: str | None, session_id: str | None) -> dict:
+    return {"trace_id": user.trace_id, "user_id": user.user_id, "role": user.role,
+            "source_id": source_id or APP_CONFIG["database"]["default_source"],
+            "session_id": session_id}
+
+
+@router.get("/api/v1/traces/{trace_id}", tags=["系统"], summary="查询执行链路（管理员）")
+def read_trace(trace_id: str, request: Request) -> dict:
+    _require_admin(request)
+    if len(trace_id) != 32 or any(char not in "0123456789abcdef" for char in trace_id):
+        raise HTTPException(status_code=400, detail="追踪编号不合法")
+    events = get_trace_events(trace_id)
+    if not events:
+        raise HTTPException(status_code=404, detail="未找到执行链路")
+    return {"trace_id": trace_id, "events": events}
+
+
 @router.get("/api/v1/me", tags=["系统"], summary="当前用户")
 def current_user(request: Request) -> dict:
     user = get_user_store().get(_build_user_context(request).user_id)
@@ -171,21 +189,30 @@ def authorize_user(user_id: str, payload: AuthorizeUserRequest, request: Request
 def query_chatbi(payload: QueryRequest, request: Request) -> QuerySuccessResponse:
     """执行自然语言查询，并返回标准化结果。"""
     started_at = perf_counter()
-    logger.info("Received question: %s", payload.question)
     user_context = _build_user_context(request)
+    audit = _audit_identity(user_context, payload.source_id, payload.session_id)
+    logger.info("Query received trace_id=%s", user_context.trace_id)
+    record_event(**audit, event="query_started")
     query_options = _resolve_query_options(payload, APP_CONFIG)
 
-    result = system.run(
-        user_question=payload.question,
-        source_id=payload.source_id,
-        security_context=user_context,
-        session_id=payload.session_id,
-        **query_options,
-    )
+    try:
+        result = system.run(
+            user_question=payload.question,
+            source_id=payload.source_id,
+            security_context=user_context,
+            session_id=payload.session_id,
+            **query_options,
+        )
+    except Exception as exc:
+        record_event(**audit, event="query_failed",
+                     duration_ms=round((perf_counter() - started_at) * 1000, 2),
+                     error_type=getattr(exc, "error_type", type(exc).__name__))
+        raise
 
     duration_ms = round((perf_counter() - started_at) * 1000, 2)
     if not result["success"]:
         error_type = result.get("error_type", "internal_server_error")
+        record_event(**audit, event="query_failed", duration_ms=duration_ms, error_type=error_type)
         status_code = 500
         if error_type == "validation":
             status_code = 400
@@ -207,7 +234,10 @@ def query_chatbi(payload: QueryRequest, request: Request) -> QuerySuccessRespons
             status_code = 503
         raise HTTPException(status_code=status_code, detail=result["error"])
 
-    metadata = {**result.get("metadata", {}), "duration_ms": duration_ms}
+    record_event(**audit, event="query_succeeded", duration_ms=duration_ms,
+                 row_count=len(result["results"]))
+    metadata = {**result.get("metadata", {}), "duration_ms": duration_ms,
+                "trace_id": user_context.trace_id}
     logger.info("Question handled successfully in %.2f ms", duration_ms)
     return QuerySuccessResponse(
         question=payload.question,
@@ -222,18 +252,37 @@ def query_chatbi(payload: QueryRequest, request: Request) -> QuerySuccessRespons
 @router.post("/api/v1/query/stream", tags=["查询"], summary="SSE 流式查询（逐步推送）")
 async def query_chatbi_stream(payload: QueryRequest, request: Request) -> StreamingResponse:
     """执行自然语言查询，以 SSE 流式返回结果。"""
-    logger.info("Stream request received: %s", payload.question)
     user_context = _build_user_context(request)
+    audit = _audit_identity(user_context, payload.source_id, payload.session_id)
+    logger.info("Stream query received trace_id=%s", user_context.trace_id)
     query_options = _resolve_query_options(payload, APP_CONFIG)
 
     def event_generator():
-        yield from system.run_stream(
-            user_question=payload.question,
-            source_id=payload.source_id,
-            security_context=user_context,
-            session_id=payload.session_id,
-            **query_options,
-        )
+        started_at = perf_counter()
+        record_event(**audit, event="query_started")
+        outcome = "query_succeeded"
+        error_type = None
+        try:
+            for event_type, data in system.run_stream_events(
+                user_question=payload.question,
+                source_id=payload.source_id,
+                security_context=user_context,
+                session_id=payload.session_id,
+                **query_options,
+            ):
+                if event_type == "error":
+                    outcome = "query_failed"
+                    error_type = data.get("error_type", "unknown")
+                yield _encode_sse(event_type, {**data, "trace_id": user_context.trace_id})
+        except Exception as exc:
+            outcome = "query_failed"
+            error_type = getattr(exc, "error_type", type(exc).__name__)
+            yield _encode_sse("error", {"error": "查询执行失败", "error_type": error_type,
+                                        "trace_id": user_context.trace_id})
+        finally:
+            record_event(**audit, event=outcome,
+                         duration_ms=round((perf_counter() - started_at) * 1000, 2),
+                         error_type=error_type)
 
     return StreamingResponse(
         event_generator(),
@@ -312,20 +361,38 @@ async def analyze_chatbi_stream(payload: AnalyzeRequest, request: Request) -> St
     归因链路包含拆解、多步 SQL 与报告生成，耗时明显长于单次查询，
     因此只提供流式接口，前端可实时看到每一步的进展。
     """
-    logger.info("Analyze request received: %s", payload.question)
     user_context = _build_user_context(request)
+    audit = _audit_identity(user_context, payload.source_id, payload.session_id)
+    logger.info("Analyze received trace_id=%s", user_context.trace_id)
     analyze_options = _resolve_analyze_options(payload, APP_CONFIG)
 
     def event_generator():
-        for event_type, data in analysis_service.run_stream_events(
-            user_question=payload.question,
-            session_id=payload.session_id,
-            max_steps=payload.max_steps,
-            source_id=payload.source_id,
-            security_context=user_context,
-            chatbi_run_options=analyze_options,
-        ):
-            yield _encode_sse(event_type, data)
+        started_at = perf_counter()
+        record_event(**audit, event="analysis_started")
+        outcome = "analysis_succeeded"
+        error_type = None
+        try:
+            for event_type, data in analysis_service.run_stream_events(
+                user_question=payload.question,
+                session_id=payload.session_id,
+                max_steps=payload.max_steps,
+                source_id=payload.source_id,
+                security_context=user_context,
+                chatbi_run_options=analyze_options,
+            ):
+                if event_type == "error":
+                    outcome = "analysis_failed"
+                    error_type = data.get("error_type", "unknown")
+                yield _encode_sse(event_type, {**data, "trace_id": user_context.trace_id})
+        except Exception as exc:
+            outcome = "analysis_failed"
+            error_type = getattr(exc, "error_type", type(exc).__name__)
+            yield _encode_sse("error", {"error": "分析执行失败", "error_type": error_type,
+                                        "trace_id": user_context.trace_id})
+        finally:
+            record_event(**audit, event=outcome,
+                         duration_ms=round((perf_counter() - started_at) * 1000, 2),
+                         error_type=error_type)
 
     return StreamingResponse(
         event_generator(),

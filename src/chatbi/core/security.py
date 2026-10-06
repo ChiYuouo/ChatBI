@@ -16,6 +16,7 @@ class UserContext:
     role: str = "pending"
     region: str | None = None
     allowed_regions: list[str] = field(default_factory=list)
+    trace_id: str | None = None
 
     @classmethod
     def demo_admin(cls) -> UserContext:
