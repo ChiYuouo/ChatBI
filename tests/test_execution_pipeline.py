@@ -33,18 +33,28 @@ class Cursor:
     def __exit__(self, *args):
         return False
 
+    def close(self):
+        pass
+
     def execute(self, sql):
+        if sql.startswith("SET "):
+            return
+        self._remaining = iter(self.rows)
         self.sqls.append(sql)
         if self.barrier:
             self.barrier.wait(timeout=5)
             projection = sqlglot.parse_one(sql, read="mysql").expressions[0]
             self.description = [(projection.alias,)]
             self.rows = [(int(projection.this.this),)]
+        self._remaining = iter(self.rows)
         if self.error:
             raise self.error
 
-    def fetchall(self):
-        return self.rows
+    def fetchone(self):
+        return next(self._remaining, None)
+
+    def fetchmany(self, size):
+        return self.rows[:size]
 
 
 class Connection:
@@ -52,7 +62,7 @@ class Connection:
         self.instance = cursor
         self.closed = False
 
-    def cursor(self):
+    def cursor(self, cursorclass=None):
         return self.instance
 
     def close(self):

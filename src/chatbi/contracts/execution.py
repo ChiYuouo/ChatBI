@@ -33,8 +33,13 @@ class QueryExecutionResult:
     rows: list[tuple]
     duration_ms: float
     explain_plan: list[dict[str, Any]] = field(default_factory=list)
+    result_bytes: int = 0
+    sql_timeout_ms: int | None = None
+    slow_query: bool = False
 
     @property
     def metadata(self) -> dict[str, Any]:
         return {"sql": self.executed_sql, "duration_ms": self.duration_ms,
-                "slow_query": bool(self.explain_plan), "explain_plan": self.explain_plan}
+                "slow_query": self.slow_query or bool(self.explain_plan), "explain_plan": self.explain_plan,
+                "result_bytes": self.result_bytes, "sql_timeout_ms": self.sql_timeout_ms,
+                "complete": True}

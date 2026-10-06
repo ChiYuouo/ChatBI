@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import logging
+from copy import copy
 from typing import Any, Generator
 
 from chatbi.analysis.agent_planner import (
@@ -29,6 +30,8 @@ from chatbi.bootstrap.runtime_factory import build_runtime
 from chatbi.core.config import APP_CONFIG
 from chatbi.core.security import QuerySecurityManager, SecurityError, UserContext
 from chatbi.services.chatbi_service import ChatBISystem
+from chatbi.execution.budget import BudgetExceeded, ExecutionBudget, ExecutionLimits, budgeted_events
+from chatbi.execution.budgeted_llm import BudgetedLLM
 
 logger = logging.getLogger("chatbi.analysis")
 
@@ -58,6 +61,7 @@ class AnalysisService:
         report_generator: ReportGenerator | None = None,
         runtime_factory=build_runtime,
         session_store: Any | None = None,
+        app_config: dict | None = None,
     ):
         # 拆解器与报告生成器最终都复用 runtime 里的 LLM（见 _bind_llm），
         # 因此这里用占位实现，避免构造时白建两个真实 LLMClient。
@@ -70,38 +74,59 @@ class AnalysisService:
         self.report_generator = report_generator or ReportGenerator(
             text_generator=_unbound_text_generator,
         )
+        self.app_config = app_config or APP_CONFIG
         self.runtime_factory = runtime_factory
         # 会话存储：传入后，带 session_id 的归因请求会在完成时写入一轮记录。
         # None 时跳过保存（测试与直接调用场景兼容）。
         self.session_store = session_store
 
-    def _bind_llm(self, runtime: Any) -> None:
+    def _bind_llm(self, runtime: Any):
         """把链路各阶段的 LLM 客户端统一绑定到当前 runtime 的实例上。
 
         拆解器和报告生成器若各自新建 LLMClient，会绕过传入的 runtime，
         导致同一次请求里出现多个模型客户端（测试时也无法注入假实现）。
         这里显式对齐，保证整条归因链路共用同一个 LLM 客户端。
         """
+        decomposer = copy(self.decomposer)
+        report_generator = copy(self.report_generator)
         llm = getattr(runtime, "llm", None)
         if llm is None:
-            return
+            return decomposer, report_generator
 
         def _generate_text(system_msg: str, prompt: str) -> str:
             return llm.generate_text(system_msg=system_msg, prompt=prompt)
 
-        if isinstance(self.decomposer, QueryDecomposer):
-            self.decomposer.llm = llm
+        if isinstance(decomposer, QueryDecomposer):
+            decomposer.llm = llm
             # 真实 LLMClient 支持 client.chat(...) 的 JSON 模式，优先走原生实现；
             # 注入的假实现没有该结构，则回退到 generate_text，保证可注入性。
             if hasattr(getattr(llm, "client", None), "chat"):
-                self.decomposer.response_generator = self.decomposer._generate_response
+                decomposer.response_generator = decomposer._generate_response
             else:
-                self.decomposer.response_generator = _generate_text
+                decomposer.response_generator = _generate_text
 
-        if isinstance(self.report_generator, ReportGenerator):
-            self.report_generator.text_generator = _generate_text
+        if isinstance(report_generator, ReportGenerator):
+            report_generator.text_generator = _generate_text
 
-    def run_stream_events(
+        return decomposer, report_generator
+
+    def run_stream_events(self, *args, execution_budget: ExecutionBudget | None = None, **kwargs):
+        budget = execution_budget or ExecutionBudget(ExecutionLimits.from_config(
+            self.app_config.get("database", {}).get("runtime", {})))
+        resources = []
+        try:
+            budget.remaining()
+            yield from budgeted_events(self._run_stream_events(*args, execution_budget=budget, resources=resources, **kwargs), budget)
+        except BudgetExceeded as exc:
+            yield "error", {"error": str(exc), "error_type": "database_budget_exceeded"}
+        finally:
+            for runtime in resources:
+                for resource in (runtime.db, runtime.llm):
+                    close = getattr(resource, "close", None)
+                    if callable(close):
+                        close()
+
+    def _run_stream_events(
         self,
         user_question: str,
         max_steps: int | None = None,
@@ -109,6 +134,8 @@ class AnalysisService:
         security_context: UserContext | None = None,
         chatbi_run_options: dict[str, Any] | None = None,
         session_id: str | None = None,
+        execution_budget: ExecutionBudget | None = None,
+        resources: list | None = None,
     ) -> Generator[tuple[str, dict[str, Any]], None, None]:
         """流式执行完整归因链路，产出 (事件类型, 事件数据) 二元组。
 
@@ -143,9 +170,13 @@ class AnalysisService:
         }
 
         # 整条链路复用同一个 runtime，避免每个子步骤各建一个数据库连接池
-        runtime = self.runtime_factory(APP_CONFIG, source_id=source_id)
+        runtime = self.runtime_factory(self.app_config, source_id=source_id)
+        resources.append(runtime)
+        execution_budget.remaining()
+        runtime = copy(runtime)
+        runtime.llm = BudgetedLLM(runtime.llm, execution_budget)
         system = ChatBISystem(runtime=runtime)
-        self._bind_llm(runtime)
+        decomposer, report_generator = self._bind_llm(runtime)
 
         yield "start", {
             "question": question,
@@ -156,7 +187,10 @@ class AnalysisService:
         # 1. 任务拆解
         yield "decomposition_start", {"message": "正在拆解分析问题"}
         try:
-            decomposition = self.decomposer.decompose(question)
+            decomposition = decomposer.decompose(question)
+            execution_budget.remaining()
+        except BudgetExceeded:
+            raise
         except Exception as exc:  # noqa: BLE001 - 拆解失败要作为业务错误回传前端
             logger.warning("任务拆解失败: %s", exc)
             yield "error", {
@@ -187,6 +221,7 @@ class AnalysisService:
             max_retries=2,
             # 每次子步骤及 SQL 修复都沿用请求身份，统一执行器再次校验。
             security_context=user_context,
+            execution_budget=execution_budget,
         )
         step_results: list[StepExecutionResult] = []
         results_by_step: dict[str, StepExecutionResult] = {}
@@ -204,6 +239,11 @@ class AnalysisService:
                 step_results.append(normalized)
                 results_by_step[data["step_id"]] = normalized
                 yield "step_done", data
+                if data.get("error_type") in {"database_budget_exceeded", "database_result_limit", "database_query_timeout"}:
+                    yield "error", {"error": data.get("error"), "error_type": data["error_type"]}
+                    return
+        except BudgetExceeded:
+            raise
         except Exception as exc:  # noqa: BLE001 - 执行异常要有明确收尾
             logger.exception("计划执行失败: %s", exc)
             yield "error", {
@@ -215,17 +255,19 @@ class AnalysisService:
             executor.cleanup()
 
         # 4. 结果汇总
+        execution_budget.remaining()
         summary = self.summarizer.summarize(question, plan, step_results)
         yield "summary_done", summary.model_dump()
 
         # 5. 归因报告
         yield "report_start", {"message": "正在生成归因分析报告"}
-        report = self.report_generator.generate(
+        report = report_generator.generate(
             original_question=question,
             analysis_goal=plan.analysis_goal,
             step_results=[result.model_dump() for result in step_results],
             summary=summary.model_dump(),
         )
+        execution_budget.remaining()
         yield "report_done", report.model_dump()
 
         # 6. 会话落库

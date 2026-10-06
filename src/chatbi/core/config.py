@@ -24,8 +24,8 @@ def _build_default_db_source() -> dict[str, object]:
         "driver": os.getenv("DB_DRIVER", "mysql"),
         "host": os.getenv("DB_HOST", "localhost"),
         "port": int(os.getenv("DB_PORT", 3307)),
-        "user": os.getenv("DB_USER", "root"),
-        "password": os.getenv("DB_PASSWORD", "123456"),
+        "user": os.getenv("DB_USER", "chatbi_reader"),
+        "password": os.getenv("DB_PASSWORD", ""),
         "database": os.getenv("DB_NAME", "chatbi_mvp"),
         "charset": "utf8mb4",
         "autocommit": True,
@@ -55,6 +55,12 @@ APP_CONFIG = {
             "max_overflow": int(os.getenv("DB_POOL_MAX_OVERFLOW", 5)),
             "pool_timeout": float(os.getenv("DB_POOL_TIMEOUT", 3)),
             "slow_query_threshold_ms": float(os.getenv("DB_SLOW_QUERY_THRESHOLD_MS", 200)),
+            "max_rows": int(os.getenv("DB_MAX_RESULT_ROWS", 1000)),
+            "max_result_bytes": int(os.getenv("DB_MAX_RESULT_BYTES", 1048576)),
+            "sql_timeout_ms": int(os.getenv("DB_SQL_TIMEOUT_MS", 5000)),
+            "total_timeout_seconds": float(os.getenv("ANALYSIS_TIMEOUT_SECONDS", 120)),
+            "max_executions": int(os.getenv("ANALYSIS_MAX_SQL_EXECUTIONS", 20)),
+            "max_total_result_bytes": int(os.getenv("ANALYSIS_MAX_RESULT_BYTES", 4194304)),
         },
     },
     "llm": {
@@ -64,6 +70,7 @@ APP_CONFIG = {
         "embedding_model": os.getenv("EMBEDDING_MODEL", "text-embedding-3-large"),
         "temperature": 0.1,
         "max_tokens": int(os.getenv("LLM_MAX_TOKENS", 4000)),
+        "timeout_seconds": float(os.getenv("LLM_TIMEOUT_SECONDS", 30)),
     },
     "features": {
         # 代码默认全部关闭，开启一律通过 .env 显式声明（FEATURE_*），

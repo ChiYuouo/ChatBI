@@ -41,7 +41,7 @@ class CapturingLLM:
 
 
 class FakeDB:
-    def execute_query(self, sql, user=None):
+    def execute_query(self, sql, user=None, budget=None):
         return QueryExecutionResult(sql, sql, "mysql_main", ["region"], [("欧洲",)], 1)
 
 

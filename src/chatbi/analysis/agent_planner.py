@@ -13,7 +13,8 @@ import sys
 import threading
 from datetime import datetime
 from decimal import Decimal
-from queue import Queue
+from queue import Empty, Full, Queue
+from contextvars import copy_context
 from typing import Any, Callable, Generator, Literal
 
 import pymysql
@@ -21,8 +22,9 @@ from pydantic import BaseModel, Field
 
 from chatbi.analysis.query_decomposer import DecompositionPlan, DecomposedTask, QueryDecomposer
 from chatbi.analysis.report_generator import ReportGenerator
-from chatbi.core.config import DB_CONFIG
+from chatbi.core.config import APP_CONFIG, DB_CONFIG
 from chatbi.core.security import UserContext
+from chatbi.execution.budget import BudgetExceeded, ExecutionBudget, ExecutionLimits, bind_budget
 from chatbi.services.chatbi_service import ChatBISystem
 
 
@@ -342,6 +344,7 @@ class StepExecutor:
         result_store: IntermediateResultStore | None = None,
         storage_connection_factory: Callable[[], Any] | None = None,
         security_context: UserContext | None = None,
+        execution_budget: ExecutionBudget | None = None,
     ):
         self.system = chatbi_system
         self.chatbi_run_options = chatbi_run_options or {
@@ -351,6 +354,9 @@ class StepExecutor:
         }
         # 归因链路的子步骤必须以发起请求的用户身份执行。
         # 缺身份由查询入口拒绝；修复重试始终保持同一请求身份。
+        self._provided_budget = execution_budget is not None
+        self._owns_system = False
+        self.execution_budget = execution_budget
         self.security_context = security_context
         self.step_runner = step_runner or self._run_with_chatbi
         # 记录是否为外部注入的自定义执行器。
@@ -375,23 +381,26 @@ class StepExecutor:
         self,
         plan: ExecutionPlan,
         max_steps: int | None = None,
+        execution_budget: ExecutionBudget | None = None,
     ) -> list[StepExecutionResult]:
         """阻塞执行整份计划，返回每步结果。"""
         return [
             result
-            for _, result in self.iter_execute_plan(plan, max_steps=max_steps)
+            for _, result in self.iter_execute_plan(plan, max_steps=max_steps, execution_budget=execution_budget)
         ]
 
     def iter_execute_plan(
         self,
         plan: ExecutionPlan,
         max_steps: int | None = None,
+        execution_budget: ExecutionBudget | None = None,
     ):
         """逐步骤执行计划，每完成一步即产出 (步骤, 结果)。
 
         这是 execute_plan（阻塞）与 execute_plan_streaming（流式）共用的执行内核：
         阻塞路径只取结果，流式路径则在每步前后向外部推送事件。
         """
+        self._start_plan_budget(execution_budget)
         results_by_step: dict[str, StepExecutionResult] = {}
         steps_to_run = plan.steps[:max_steps] if max_steps is not None else plan.steps
         abort_triggered = False
@@ -471,6 +480,7 @@ class StepExecutor:
         self,
         plan: ExecutionPlan,
         max_steps: int | None = None,
+        execution_budget: ExecutionBudget | None = None,
     ) -> Generator[tuple[str, dict[str, Any]], None, None]:
         """流式执行计划，并把每个步骤内部的 SQL 生成过程也实时透传出来。
 
@@ -487,6 +497,7 @@ class StepExecutor:
         - step_retry: 该步骤失败后重试（mode=rewrite 表示带报错重写）
         - step_done: 该步骤结束（含成功/失败/跳过）
         """
+        self._start_plan_budget(execution_budget)
         total_steps = len(plan.steps[:max_steps] if max_steps is not None else plan.steps)
         yield "plan_ready", {
             "original_question": plan.original_question,
@@ -579,8 +590,20 @@ class StepExecutor:
         由队列把子事件中转回当前生成器。
         最后一个产出的内部事件 _step_result 携带该步骤的执行结果。
         """
-        queue: Queue = Queue()
+        queue: Queue = Queue(maxsize=64)
+        closed = threading.Event()
         holder: dict[str, Any] = {}
+
+        def send_event(event):
+            while not closed.is_set():
+                if self.execution_budget is not None:
+                    self.execution_budget.remaining()
+                try:
+                    queue.put(event, timeout=0.1)
+                    return
+                except Full:
+                    continue
+            raise BudgetExceeded("分析事件流已关闭。")
 
         def _worker() -> None:
             try:
@@ -588,15 +611,23 @@ class StepExecutor:
                     step=step,
                     question=question,
                     context_used=context_used,
-                    event_sink=queue.put,
+                    event_sink=send_event,
                 )
             except BaseException as exc:  # noqa: BLE001 - 需原样回传给主线程
                 holder["error"] = exc
             finally:
-                queue.put(None)
+                try:
+                    send_event(None)
+                except BudgetExceeded:
+                    # 即使预算已耗尽，也尝试唤醒消费者；满队列时消费者会自行检查预算。
+                    try:
+                        queue.put_nowait(None)
+                    except Full:
+                        pass
 
+        worker_context = copy_context()
         thread = threading.Thread(
-            target=_worker,
+            target=lambda: worker_context.run(_worker),
             name=f"chatbi-step-{step.step_id}",
             daemon=True,
         )
@@ -604,7 +635,11 @@ class StepExecutor:
 
         try:
             while True:
-                item = queue.get()
+                timeout = self.execution_budget.remaining() if self.execution_budget is not None else None
+                try:
+                    item = queue.get(timeout=timeout)
+                except Empty:
+                    raise BudgetExceeded("分析总时间预算已耗尽，停止等待子步骤。")
                 if item is None:
                     break
                 event_type, payload = item
@@ -614,6 +649,7 @@ class StepExecutor:
                     **payload,
                 }
         finally:
+            closed.set()
             thread.join(timeout=1)
 
         if holder.get("error") is not None:
@@ -652,11 +688,13 @@ class StepExecutor:
     ) -> dict[str, Any]:
         if self.system is None:
             self.system = ChatBISystem()
+            self._owns_system = True
 
         if event_sink is None:
             return self.system.run(
                 user_question=question,
                 security_context=self.security_context,
+                execution_budget=self.execution_budget,
                 **self.chatbi_run_options,
             )
 
@@ -669,6 +707,7 @@ class StepExecutor:
             user_question=question,
             security_context=self.security_context,
             **self.chatbi_run_options,
+            execution_budget=self.execution_budget,
         ):
             if event_type == "sql_chunk":
                 sql_parts.append(data.get("content", ""))
@@ -844,6 +883,11 @@ class StepExecutor:
         event_sink: Callable[[tuple[str, dict[str, Any]]], None] | None,
     ) -> dict[str, Any]:
         """调用步骤执行器，兼容自定义 step_runner 与内置 ChatBI 链路。"""
+        if self.execution_budget is not None:
+            try:
+                self.execution_budget.remaining()
+            except BudgetExceeded as exc:
+                return {"success": False, "error": str(exc), "error_type": "database_budget_exceeded"}
         if event_sink is None or not self._uses_default_runner:
             return self.step_runner(question)
         return self._run_with_chatbi(question, event_sink=event_sink)
@@ -946,8 +990,18 @@ class StepExecutor:
             return []
         return self.result_store.get(reference)
 
+    def _start_plan_budget(self, budget: ExecutionBudget | None = None) -> None:
+        if budget is not None:
+            self.execution_budget = budget
+        elif not self._provided_budget:
+            self.execution_budget = ExecutionBudget(ExecutionLimits.from_config(APP_CONFIG["database"]["runtime"]))
+
     def cleanup(self) -> None:
         self.result_store.cleanup()
+        if self._owns_system and self.system is not None:
+            self.system.close()
+            self.system = None
+            self._owns_system = False
 
     @staticmethod
     def _build_result_store(
@@ -1073,11 +1127,24 @@ class PlanAndExecuteAgent:
         self.summarizer = summarizer or ResultSummarizer()
         self.report_generator = report_generator or ReportGenerator()
 
-    def run(
+    def run(self, *args, execution_budget: ExecutionBudget | None = None, **kwargs):
+        budget = execution_budget or ExecutionBudget(ExecutionLimits.from_config(APP_CONFIG["database"]["runtime"]))
+        try:
+            with bind_budget(budget):
+                budget.remaining()
+                return self._run(*args, execution_budget=budget, **kwargs)
+        except BudgetExceeded as exc:
+            return {"success": False, "error": str(exc), "error_type": "database_budget_exceeded"}
+        finally:
+            if self.executor._owns_system:
+                self.executor.cleanup()
+
+    def _run(
         self,
         user_question: str,
         decomposition_override: dict[str, Any] | None = None,
         max_steps: int | None = None,
+        execution_budget: ExecutionBudget | None = None,
     ) -> dict[str, Any]:
         if decomposition_override is not None:
             _print_progress("使用传入的拆解结果，跳过任务拆解。")
@@ -1089,10 +1156,15 @@ class PlanAndExecuteAgent:
                 f"任务拆解完成，共 {len(decomposition.get('subtasks', []))} 个子任务。"
             )
 
+        execution_budget.remaining()
         _print_progress("开始生成执行计划。")
         plan = self.planner.build_plan(user_question, decomposition)
         _print_progress(f"执行计划生成完成，共 {len(plan.steps)} 个步骤。")
-        step_results = self.executor.execute_plan(plan, max_steps=max_steps)
+        step_results = self.executor.execute_plan(plan, max_steps=max_steps, execution_budget=execution_budget)
+        execution_budget.remaining()
+        for result in step_results:
+            if result.error_type in {"database_budget_exceeded", "database_result_limit", "database_query_timeout"}:
+                return {"success": False, "error": result.error, "error_type": result.error_type}
         _print_progress("开始生成执行摘要。")
         summary = self.summarizer.summarize(user_question, plan, step_results)
         _print_progress("执行摘要生成完成。")
@@ -1103,6 +1175,7 @@ class PlanAndExecuteAgent:
             step_results=[result.model_dump() for result in step_results],
             summary=summary.model_dump(),
         )
+        execution_budget.remaining()
         _print_progress("分析报告生成完成。")
 
         return {

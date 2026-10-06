@@ -144,6 +144,7 @@ def authorize_user(user_id: str, payload: AuthorizeUserRequest, request: Request
     responses={
         400: {"model": ErrorResponse, "description": "输入问题不合法"},
         403: {"model": ErrorResponse, "description": "权限不足或安全策略拒绝"},
+        413: {"model": ErrorResponse, "description": "查询结果超过行数或字节限制"},
         422: {"model": ErrorResponse, "description": "生成的 SQL 无法执行"},
         502: {"model": ErrorResponse, "description": "LLM 调用失败"},
         503: {"model": ErrorResponse, "description": "数据库连接异常"},
@@ -180,8 +181,12 @@ def query_chatbi(payload: QueryRequest, request: Request) -> QuerySuccessRespons
             status_code = 422
         elif error_type == "database_connection_error":
             status_code = 503
-        elif error_type == "database_query_timeout":
+        elif error_type in {"database_query_timeout", "database_budget_exceeded"}:
             status_code = 504
+        elif error_type == "database_result_limit":
+            status_code = 413
+        elif error_type == "database_pool_timeout":
+            status_code = 503
         raise HTTPException(status_code=status_code, detail=result["error"])
 
     metadata = {**result.get("metadata", {}), "duration_ms": duration_ms}

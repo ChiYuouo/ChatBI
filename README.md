@@ -31,13 +31,27 @@ flowchart LR
 
 ## 快速开始
 
-需要 Docker Compose，以及一个兼容 OpenAI API 的模型服务。复制 `.env.example` 为 `.env`，填写 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`LLM_MODEL`、`EMBEDDING_MODEL`、`DB_PASSWORD` 和 `JWT_SECRET`，然后启动：
+需要 Docker Compose，以及一个兼容 OpenAI API 的模型服务。复制 `.env.example` 为 `.env`，填写模型配置、`MYSQL_ROOT_PASSWORD`（初始化管理账户）、`DB_PASSWORD`（分析只读账户）和 `JWT_SECRET`，保留 `DB_USER=chatbi_reader`，然后启动：
 
 ```bash
 docker compose up --build
 ```
 
 打开 [Web 工作台](http://localhost:8300)；[API 文档](http://localhost:8000/docs)和[健康检查](http://localhost:8000/health)也可直接访问。Compose 首次启动时会导入 `docker/mysql/init/` 中的示例业务数据。若 8300 端口被占用，可在 `.env` 中设置 `FRONTEND_PORT`。
+
+Windows 若报 `ports are not available` / `forbidden by its access permissions`，端口可能处于系统保留范围。可在 `.env` 设置 `BACKEND_PORT=18000`、`FRONTEND_PORT=18300`，再运行 `docker compose up -d`；访问地址相应改为 `http://localhost:18300` 和 `http://localhost:18000/docs`。这两项只改变宿主机映射，容器间通信仍使用内部端口。
+
+首次初始化还会运行 `02-reader.sh`，为分析账户仅授予五张演示表的 SELECT 权限；后端不再使用 root 配置。管理密码与分析密码分别配置，管理密码不会传给后端。
+
+已有 MySQL 数据卷不会重新执行初始化脚本。保留数据卷，将 `.env` 中的 `MYSQL_ROOT_PASSWORD` 设为该数据库原有的 root 密码，再配置 `DB_USER=chatbi_reader` 和新的分析密码，按顺序运行：
+
+```bash
+docker compose up -d mysql
+docker compose exec mysql bash /docker-entrypoint-initdb.d/02-reader.sh
+docker compose up -d --build backend frontend
+```
+
+脚本只创建/更新指定分析账户并重设其五表读取权限，不修改业务数据。不要通过删除数据卷来切换账户。接入自己管理的 MySQL 时，由数据库管理员创建并授权只读账户，再配置 `DB_USER`、`DB_PASSWORD`；这些初始化脚本仅用于 Compose 演示库。
 
 也可以在本地分别运行前后端（需要 Python 3.12+、Node.js 和 MySQL）：
 
@@ -80,9 +94,30 @@ SQL 校验当前仅支持演示库的五张制造业表、明确的字段和常�
 
 销售订单按客户的授权区域过滤，不依赖订单中冗余的区域值。销售暂不能通过任意 SQL 访问金额、成本和费用，别名或聚合也不能绕过；受审的区域收入指标模板仍待接入。安全/权限拒绝和查询超时不触发 SQL 修复重试。
 
-目前尚未完成租户/数据源授权、只读数据库账户切换和执行预算。真实 MySQL 集成验证仍待完成，离线测试通过不能替代这些边界。
+当前执行限制由环境变量配置，查询、子步骤及修复重试共享预算：
+
+| 配置 | 默认值 | 含义 |
+|---|---:|---|
+| `DB_MAX_RESULT_ROWS` | 1000 | 单条 SQL 最大返回行数 |
+| `DB_MAX_RESULT_BYTES` | 1048576 | 单条 SQL 的列与结果行 UTF-8 JSON 大小上限 |
+| `DB_SQL_TIMEOUT_MS` | 5000 | MySQL 单条 SELECT 服务端执行时间上限，毫秒 |
+| `ANALYSIS_TIMEOUT_SECONDS` | 120 | 一次查询或整次多步分析的时间预算，秒 |
+| `ANALYSIS_MAX_SQL_EXECUTIONS` | 20 | 整次分析的 SQL 尝试次数，失败与修复也计入 |
+| `ANALYSIS_MAX_RESULT_BYTES` | 4194304 | 整次分析累计读取的结果大小上限 |
+| `LLM_TIMEOUT_SECONDS` | 30 | 单次模型/向量 API 超时，且不超过剩余预算 |
+
+超过行数或字节限制会明确失败，不返回截断数据作为成功结果。预算耗尽或结果超限会结束多步分析，不继续生成完整报告。连接池等待服从剩余预算，失效及未读完的连接会丢弃。SQL 会增加用于检测超限的 LIMIT，但不会扩大用户原本更小的 LIMIT。
+
+时间预算在阶段边界和受控网络调用中检查；本地同步计算及第三方库调用不能被 Python 立即强制中断，超时后的结果会被拒绝。结果字节统计不包含 SQL、格式化文本、报告和 SSE 外层封装。尚未完成租户/数据源授权、业务口径治理和持久取消协议。
 
 后端离线回归使用 `uv run pytest -q`，测试会固定功能开关并使用临时账户/会话存储，不调用真实模型或业务数据库。总体路线见 [企业改造规划](docs/enterprise-transformation-plan.md)，当前实施进度见 [第一阶段文档](docs/stages/phase-1-query-execution.md)。其他阶段文档从 [文档目录](docs/README.md) 进入。
+
+真实 MySQL 集成测试默认跳过。显式开启后，测试会自行创建、初始化并删除独立的 MySQL 8.4 容器，不读取 `.env` 的数据库凭据，也不连接现有业务库：
+
+```powershell
+$env:CHATBI_MYSQL_INTEGRATION = '1'
+uv run pytest -q tests/test_mysql_execution_integration.py
+```
 
 ## Text-to-SQL 评测
 

@@ -13,6 +13,13 @@ __pycache__/
 
 # 密钥：运行时通过 compose 的 env_file / environment 注入，绝不进镜像
 .env
+.env.*
+!.env.example
+
+# 本地账户、会话和 SQLite 临时文件不能进入构建上下文或镜像
+data/*.db
+data/*.db-*
+data/*.sqlite*
 
 # 前端有自己的构建上下文，后端镜像不需要
 frontend/

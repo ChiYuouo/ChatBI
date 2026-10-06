@@ -1,13 +1,14 @@
 """FastAPI 应用创建与全局中间件配置。"""
 
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from chatbi.api.dependencies import attach_user_context
+from chatbi.api.dependencies import attach_user_context, system
 from chatbi.api.routes import router
 from chatbi.api.schemas import ErrorResponse
 from chatbi.core.config import APP_CONFIG
@@ -21,7 +22,15 @@ logger = logging.getLogger("chatbi.api")
 
 def create_app() -> FastAPI:
     """创建并配置 FastAPI 应用。"""
+    @asynccontextmanager
+    async def lifespan(application):
+        try:
+            yield
+        finally:
+            system.close()
+
     application = FastAPI(
+        lifespan=lifespan,
         title="ChatBI MVP API",
         version="0.2.0",
         description="""

@@ -10,6 +10,8 @@ from types import SimpleNamespace
 
 from chatbi.analysis.analysis_service import AnalysisService
 from chatbi.core.security import UserContext
+from chatbi.execution.budget import ExecutionBudget, ExecutionLimits
+from chatbi.infrastructure.database import QueryExecutionError
 
 
 class FakeLLM:
@@ -52,7 +54,7 @@ class FakeLLM:
 
 
 class FakeDB:
-    def execute_query(self, sql, user=None):
+    def execute_query(self, sql, user=None, budget=None):
         return QueryExecutionResult(sql, sql, "mysql_main", ["region", "amt"], [("欧洲", 100), ("北美", 300)], 5)
 
 
@@ -224,7 +226,7 @@ def _build_recording_service(captured_users):
     """构造一个能记录每个子步骤所用身份的 AnalysisService。"""
 
     class RecordingDB(FakeDB):
-        def execute_query(self, sql, user=None):
+        def execute_query(self, sql, user=None, budget=None):
             captured_users.append(user)
             return super().execute_query(sql, user)
 
@@ -322,3 +324,72 @@ def test_analysis_service_skips_persistence_without_session_id():
     assert events[-1][0] == "done"
     # anonymous 名下也没有记录 —— 没有 session_id 就完全不触碰存储
     assert store.get_turns(None, "anonymous") == []
+
+
+def test_analysis_substeps_share_budget_and_do_not_report_complete_after_exhaustion():
+    seen = []
+    closed = []
+    class BudgetDB(FakeDB):
+        def execute_query(self, sql, user=None, budget=None):
+            seen.append(budget)
+            budget.start_execution()
+            return super().execute_query(sql, user, budget)
+        def close(self):
+            closed.append(True)
+    def factory(config, source_id=None):
+        runtime = build_fake_runtime_factory()(config, source_id)
+        runtime.db = BudgetDB()
+        return runtime
+    budget = ExecutionBudget(ExecutionLimits(max_executions=1))
+    service = AnalysisService(runtime_factory=factory)
+    events = list(service.run_stream_events("利润为何下降", security_context=UserContext.demo_admin(),
+        chatbi_run_options=HERMETIC_RUN_OPTIONS, execution_budget=budget))
+    assert seen == [budget, budget]
+    assert dict(events)["error"]["error_type"] == "database_budget_exceeded"
+    assert "report_done" not in dict(events)
+    assert closed == [True]
+
+
+def test_analysis_result_limit_does_not_generate_report_or_retry_and_closes_runtime():
+    calls, closed = [], []
+    class LimitedDB(FakeDB):
+        def execute_query(self, sql, user=None, budget=None):
+            calls.append(sql)
+            raise QueryExecutionError("result_limit", "too many rows")
+        def close(self):
+            closed.append(True)
+    def factory(config, source_id=None):
+        runtime = build_fake_runtime_factory()(config, source_id)
+        runtime.db = LimitedDB()
+        return runtime
+    service = AnalysisService(runtime_factory=factory)
+    events = list(service.run_stream_events("利润为何下降", security_context=UserContext.demo_admin(),
+        chatbi_run_options=HERMETIC_RUN_OPTIONS))
+    assert len(calls) == 1
+    assert dict(events)["error"]["error_type"] == "database_result_limit"
+    assert "report_done" not in dict(events)
+    assert closed == [True]
+
+
+def test_analysis_closes_runtime_if_consumer_closes_stream():
+    closed = []
+    def factory(config, source_id=None):
+        runtime = build_fake_runtime_factory()(config, source_id)
+        runtime.db.close = lambda: closed.append(True)
+        return runtime
+    service = AnalysisService(runtime_factory=factory)
+    stream = service.run_stream_events("利润为何下降", security_context=UserContext.demo_admin(),
+        chatbi_run_options=HERMETIC_RUN_OPTIONS)
+    assert next(stream)[0] == "start"
+    stream.close()
+    assert closed == [True]
+
+
+def test_analysis_does_not_rebind_shared_decomposer_and_report_generator():
+    service = AnalysisService(runtime_factory=build_fake_runtime_factory())
+    original_llm = service.decomposer.llm
+    original_text = service.report_generator.text_generator
+    list(service.run_stream_events("利润为何下降", security_context=UserContext.demo_admin(),
+        chatbi_run_options=HERMETIC_RUN_OPTIONS))
+    assert service.decomposer.llm is original_llm
+    assert service.report_generator.text_generator is original_text

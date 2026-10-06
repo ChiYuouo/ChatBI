@@ -7,8 +7,10 @@ services:
     container_name: chatbi-mysql
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required in .env}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required in .env}
       MYSQL_DATABASE: ${DB_NAME:-chatbi_mvp}
+      DB_USER: ${DB_USER:-chatbi_reader}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required in .env}
       TZ: Asia/Shanghai
     command:
       - --character-set-server=utf8mb4
@@ -42,9 +44,19 @@ services:
       # 容器内走 compose 网络，主机名就是服务名 mysql
       DB_HOST: mysql
       DB_PORT: "3306"
-      DB_USER: root
+      DB_USER: ${DB_USER:-chatbi_reader}
       DB_PASSWORD: ${DB_PASSWORD}
       DB_NAME: ${DB_NAME:-chatbi_mvp}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+      DB_POOL_MAX_OVERFLOW: ${DB_POOL_MAX_OVERFLOW:-5}
+      DB_POOL_TIMEOUT: ${DB_POOL_TIMEOUT:-3}
+      DB_MAX_RESULT_ROWS: ${DB_MAX_RESULT_ROWS:-1000}
+      DB_MAX_RESULT_BYTES: ${DB_MAX_RESULT_BYTES:-1048576}
+      DB_SQL_TIMEOUT_MS: ${DB_SQL_TIMEOUT_MS:-5000}
+      ANALYSIS_TIMEOUT_SECONDS: ${ANALYSIS_TIMEOUT_SECONDS:-120}
+      ANALYSIS_MAX_SQL_EXECUTIONS: ${ANALYSIS_MAX_SQL_EXECUTIONS:-20}
+      ANALYSIS_MAX_RESULT_BYTES: ${ANALYSIS_MAX_RESULT_BYTES:-4194304}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-30}
       # LLM 配置透传自 .env
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
@@ -65,13 +77,13 @@ services:
       FEATURE_INDICATOR_RAG: ${FEATURE_INDICATOR_RAG:-false}
       FEATURE_QUERY_REWRITE: ${FEATURE_QUERY_REWRITE:-false}
       # 前端已经走 Nginx 同源反代，这里只是兜底放开直连调试
-      CORS_ALLOWED_ORIGINS: http://localhost:${FRONTEND_PORT:-8100},http://127.0.0.1:${FRONTEND_PORT:-8100}
+      CORS_ALLOWED_ORIGINS: http://localhost:${FRONTEND_PORT:-8300},http://127.0.0.1:${FRONTEND_PORT:-8300}
       TZ: Asia/Shanghai
     volumes:
       # Persist SQLite session history on the host so it survives container rebuilds
       - ./data:/app/data
     ports:
-      - "8000:8000"
+      - "${BACKEND_PORT:-8000}:8000"
     healthcheck:
       test:
         - CMD
@@ -95,7 +107,7 @@ services:
       backend:
         condition: service_started
     ports:
-      - "${FRONTEND_PORT:-8100}:80"
+      - "${FRONTEND_PORT:-8300}:80"
 
 volumes:
   chatbi-mysql-data:

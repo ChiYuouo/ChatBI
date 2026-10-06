@@ -22,13 +22,17 @@ import json
 import re
 from dataclasses import dataclass
 from decimal import Decimal
+from datetime import date, datetime
 from types import SimpleNamespace
+from threading import Lock
 from typing import Any, Generator
 
 from chatbi.bootstrap.runtime_factory import build_runtime
 from chatbi.core.config import APP_CONFIG, LLM_CONFIG
 from chatbi.core.security import QuerySecurityManager, SecurityError, UserContext
 from chatbi.infrastructure.database import QueryExecutionError
+from chatbi.execution.budget import BudgetExceeded, ExecutionBudget, ExecutionLimits, bind_budget, budgeted_events
+from chatbi.execution.budgeted_llm import BudgetedLLM
 from chatbi.infrastructure.session_store import SessionStore
 from chatbi.retrieval.indicator_knowledge import IndicatorKnowledge
 from chatbi.text2sql.prompt_builder import build_prompt
@@ -58,6 +62,8 @@ class ChatBISystem:
         session_store: SessionStore | None = None,
         query_rewriter: QueryRewriter | None = None,
     ):
+        self._runtime_lock = Lock()
+        self._source_runtimes = {}
         self.security = QuerySecurityManager()
         self.app_config = app_config or APP_CONFIG
         self.runtime_factory = runtime_factory
@@ -108,7 +114,41 @@ class ChatBISystem:
                 formatter=self.formatter,
                 indicator_knowledge=self.indicator_knowledge,
             )
-        return self.runtime_factory(self.app_config, source_id=source_id)
+        with self._runtime_lock:
+            if source_id not in self._source_runtimes:
+                self._source_runtimes[source_id] = self.runtime_factory(self.app_config, source_id=source_id)
+            return self._source_runtimes[source_id]
+
+    def close(self) -> None:
+        with self._runtime_lock:
+            runtimes = [self.runtime, *self._source_runtimes.values()]
+            self._source_runtimes.clear()
+        for runtime in runtimes:
+            for resource in (runtime.db, runtime.llm):
+                close = getattr(resource, "close", None)
+                if callable(close):
+                    close()
+
+    def _new_budget(self) -> ExecutionBudget:
+        config = self.app_config.get("database", {}).get("runtime", {})
+        return ExecutionBudget(ExecutionLimits.from_config(config))
+
+    def run(self, *args, execution_budget: ExecutionBudget | None = None, **kwargs) -> dict:
+        budget = execution_budget or self._new_budget()
+        try:
+            budget.remaining()
+            with bind_budget(budget):
+                return self._run(*args, execution_budget=budget, **kwargs)
+        except BudgetExceeded as exc:
+            return {"success": False, "error": str(exc), "error_type": "database_budget_exceeded"}
+
+    def run_stream_events(self, *args, execution_budget: ExecutionBudget | None = None, **kwargs):
+        budget = execution_budget or self._new_budget()
+        try:
+            budget.remaining()
+            yield from budgeted_events(self._run_stream_events(*args, execution_budget=budget, **kwargs), budget)
+        except BudgetExceeded as exc:
+            yield "error", {"error": str(exc), "error_type": "database_budget_exceeded"}
 
     def _resolve_feature_options(self, overrides: dict[str, bool | None]) -> dict[str, bool]:
         feature_defaults = self.app_config.get("features", {})
@@ -164,10 +204,16 @@ class ChatBISystem:
         security_context: UserContext | None,
         session_id: str | None = None,
         use_query_rewrite: bool | None = None,
+        execution_budget: ExecutionBudget | None = None,
     ) -> _PreparedQuery | None:
         """完成同步与流式查询共用的解析、知识检索和 Prompt 构造。"""
         user_context = self.security.require_user(security_context)
-        runtime = self._get_runtime(source_id)
+        execution_budget = execution_budget or self._new_budget()
+        execution_budget.remaining()
+        base_runtime = self._get_runtime(source_id)
+        runtime = SimpleNamespace(source_id=base_runtime.source_id, parser=base_runtime.parser,
+            db=base_runtime.db, llm=BudgetedLLM(base_runtime.llm, execution_budget),
+            formatter=base_runtime.formatter, indicator_knowledge=base_runtime.indicator_knowledge)
         options = self._resolve_feature_options(
             {
                 "use_few_shot": use_few_shot,
@@ -216,6 +262,7 @@ class ChatBISystem:
             indicator_knowledge=runtime.indicator_knowledge,
         )
 
+        execution_budget.remaining()
         system_msg, prompt = build_prompt(
             rewritten_question,
             use_few_shot=options["use_few_shot"],
@@ -225,6 +272,7 @@ class ChatBISystem:
             use_schema_linking=options["use_schema_linking"],
             history=context_history,
         )
+        execution_budget.remaining()
         return _PreparedQuery(
             runtime=runtime,
             options=options,
@@ -235,7 +283,7 @@ class ChatBISystem:
             rewritten_question=rewritten_question,
         )
 
-    def run(
+    def _run(
         self,
         user_question: str,
         use_few_shot: bool | None = None,
@@ -248,6 +296,7 @@ class ChatBISystem:
         security_context: UserContext | None = None,
         session_id: str | None = None,
         use_query_rewrite: bool | None = None,
+        execution_budget: ExecutionBudget | None = None,
     ) -> dict:
         """
         运行完整链路
@@ -282,6 +331,7 @@ class ChatBISystem:
             security_context=security_context,
             session_id=session_id,
             use_query_rewrite=use_query_rewrite,
+            execution_budget=execution_budget,
         )
         if prepared is None:
             return {
@@ -306,6 +356,8 @@ class ChatBISystem:
         # 4. 生成 SQL
         try:
             sql = runtime.llm.generate_sql(system_msg, prompt)
+        except BudgetExceeded:
+            raise
         except Exception as e:
             return {
                 "success": False,
@@ -327,7 +379,7 @@ class ChatBISystem:
 
         # 5. 执行 SQL
         try:
-            execution = runtime.db.execute_query(sql, user=user_context)
+            execution = runtime.db.execute_query(sql, user=user_context, budget=execution_budget)
             columns, results = execution.columns, execution.rows
             db_info = execution.metadata
             sql = execution.executed_sql
@@ -364,6 +416,9 @@ class ChatBISystem:
                     "db_duration_ms": db_info.get("duration_ms"),
                     "db_slow_query": db_info.get("slow_query", False),
                     "db_explain_plan": db_info.get("explain_plan", []),
+                    "result_bytes": db_info.get("result_bytes", 0),
+                    "sql_timeout_ms": db_info.get("sql_timeout_ms"),
+                    "complete": db_info.get("complete", True),
                 }
             }
         except SecurityError as e:
@@ -409,6 +464,8 @@ class ChatBISystem:
                     "db_raw_error": e.metadata.get("raw_error"),
                 }
             }
+        except BudgetExceeded:
+            raise
         except Exception as e:
             return {
                 "success": False,
@@ -484,7 +541,7 @@ class ChatBISystem:
         ):
             yield _sse_event(event_type, data)
 
-    def run_stream_events(
+    def _run_stream_events(
         self,
         user_question: str,
         use_few_shot: bool | None = None,
@@ -497,6 +554,7 @@ class ChatBISystem:
         security_context: UserContext | None = None,
         session_id: str | None = None,
         use_query_rewrite: bool | None = None,
+        execution_budget: ExecutionBudget | None = None,
     ) -> Generator[tuple[str, dict], None, None]:
         """流式运行完整链路，产出 (事件类型, 事件数据) 二元组。
 
@@ -522,6 +580,7 @@ class ChatBISystem:
             security_context=security_context,
             session_id=session_id,
             use_query_rewrite=use_query_rewrite,
+            execution_budget=execution_budget,
         )
         if prepared is None:
             yield "error", {
@@ -558,6 +617,8 @@ class ChatBISystem:
                     continue  # 跳过空 chunk（部分模型会返回空字符串的 delta）
                 sql_parts.append(chunk_text)
                 yield "sql_chunk", {"content": chunk_text}
+        except BudgetExceeded:
+            raise
         except Exception as e:
             yield "error", {
                 "error": str(e),
@@ -583,7 +644,7 @@ class ChatBISystem:
 
         # 6. 执行 SQL
         try:
-            execution = runtime.db.execute_query(sql, user=user_context)
+            execution = runtime.db.execute_query(sql, user=user_context, budget=execution_budget)
             columns, results = execution.columns, execution.rows
             db_info = execution.metadata
             sql = execution.executed_sql
@@ -616,6 +677,9 @@ class ChatBISystem:
                     "db_duration_ms": db_info.get("duration_ms"),
                     "db_slow_query": db_info.get("slow_query", False),
                     "db_explain_plan": db_info.get("explain_plan", []),
+                    "result_bytes": db_info.get("result_bytes", 0),
+                    "sql_timeout_ms": db_info.get("sql_timeout_ms"),
+                    "complete": db_info.get("complete", True),
                 }
             }
         except SecurityError as e:
@@ -653,6 +717,8 @@ class ChatBISystem:
                     "db_raw_error": e.metadata.get("raw_error"),
                 }
             }
+        except BudgetExceeded:
+            raise
         except Exception as e:
             yield "error", {
                 "error": str(e),
@@ -680,4 +746,6 @@ def _json_serializer(obj):
     """JSON 序列化补充：处理 Decimal 等非标准类型"""
     if isinstance(obj, Decimal):
         return float(obj)
+    if isinstance(obj, (date, datetime)):
+        return obj.isoformat()
     raise TypeError(f"Object of type {type(obj)} is not JSON serializable")

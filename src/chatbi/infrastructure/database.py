@@ -8,8 +8,9 @@
 from __future__ import annotations
 
 import logging
-from queue import Empty, LifoQueue
-from time import perf_counter
+import json
+from threading import Condition
+from time import monotonic, perf_counter
 from typing import Any, Callable
 
 import pymysql
@@ -18,6 +19,7 @@ from chatbi.core.config import APP_CONFIG, DB_RUNTIME_CONFIG, get_database_sourc
 from chatbi.core.security import QuerySecurityManager, UserContext
 from chatbi.contracts.execution import ExecutionContext, QueryExecutionResult
 from chatbi.execution.query_executor import QueryExecutor
+from chatbi.execution.budget import BudgetExceeded, ExecutionBudget, ExecutionLimits
 
 logger = logging.getLogger("chatbi.database")
 
@@ -37,60 +39,102 @@ class QueryExecutionError(RuntimeError):
 
 
 class DatabaseConnectionPool:
-    """轻量连接池，优先复用空闲连接，避免每次查询重新建连。"""
+    """有界线程安全连接池；创建前预留名额，关闭后归还的连接也会销毁。"""
 
-    def __init__(
-        self,
-        connection_factory: Callable[[], Any],
-        pool_size: int,
-        max_overflow: int = 0,
-        pool_timeout: float = 3.0,
-    ):
+    def __init__(self, connection_factory: Callable[[], Any], pool_size: int,
+                 max_overflow: int = 0, pool_timeout: float = 3.0):
+        if pool_size < 1 or max_overflow < 0 or pool_timeout <= 0:
+            raise ValueError("连接池容量和等待时间配置不合法。")
         self.connection_factory = connection_factory
-        self.pool_size = max(pool_size, 1)
-        self.max_overflow = max(max_overflow, 0)
+        self.pool_size = pool_size
+        self.max_overflow = max_overflow
         self.pool_timeout = pool_timeout
-        self._idle_connections: LifoQueue[Any] = LifoQueue(maxsize=self.pool_size)
+        self._condition = Condition()
+        self._idle = []
+        self._leased = {}
         self._total_connections = 0
+        self._closed = False
 
-    def acquire(self) -> Any:
-        try:
-            conn = self._idle_connections.get_nowait()
-        except Empty:
-            if self._total_connections < self.pool_size + self.max_overflow:
-                conn = self.connection_factory()
-                self._total_connections += 1
+    @property
+    def stats(self) -> dict[str, Any]:
+        with self._condition:
+            return {"total": self._total_connections, "idle": len(self._idle),
+                    "in_use": len(self._leased), "closed": self._closed}
+
+    def acquire(self, timeout: float | None = None) -> Any:
+        deadline = monotonic() + min(self.pool_timeout, timeout if timeout is not None else self.pool_timeout)
+        while True:
+            create = False
+            with self._condition:
+                if self._closed:
+                    raise QueryExecutionError("connection_error", "数据库连接池已经关闭。")
+                if self._idle:
+                    conn = self._idle.pop()
+                    self._leased[id(conn)] = conn
+                elif self._total_connections < self.pool_size + self.max_overflow:
+                    self._total_connections += 1
+                    create = True
+                else:
+                    remaining = deadline - monotonic()
+                    if remaining <= 0:
+                        raise QueryExecutionError("pool_timeout", "数据库连接池繁忙，等待连接超时。")
+                    self._condition.wait(remaining)
+                    continue
+            if create:
+                try:
+                    conn = self.connection_factory()
+                except BaseException:
+                    with self._condition:
+                        self._total_connections -= 1
+                        self._condition.notify_all()
+                    raise
+                with self._condition:
+                    closed = self._closed
+                    if closed:
+                        self._total_connections -= 1
+                        self._condition.notify_all()
+                    else:
+                        self._leased[id(conn)] = conn
+                if closed:
+                    self._close(conn)
+                    raise QueryExecutionError("connection_error", "数据库连接池已经关闭。")
                 return conn
-            conn = self._idle_connections.get(timeout=self.pool_timeout)
+            try:
+                conn.ping(reconnect=False)
+                return conn
+            except Exception:
+                self.release(conn, reusable=False)
+                if monotonic() >= deadline:
+                    raise QueryExecutionError("connection_error", "数据库空闲连接已失效。")
 
-        try:
-            conn.ping(reconnect=True)
-            return conn
-        except Exception:
-            self._discard_connection(conn)
-            conn = self.connection_factory()
-            self._total_connections += 1
-            return conn
-
-    def release(self, conn: Any) -> None:
-        try:
-            self._idle_connections.put_nowait(conn)
-        except Exception:
-            self._discard_connection(conn)
+    def release(self, conn: Any, reusable: bool = True) -> None:
+        with self._condition:
+            if self._leased.pop(id(conn), None) is None:
+                raise ValueError("连接没有借出或已经归还。")
+            discard = self._closed or not reusable or len(self._idle) >= self.pool_size
+            if discard:
+                self._total_connections -= 1
+            else:
+                self._idle.append(conn)
+            self._condition.notify_all()
+        if discard:
+            self._close(conn)
 
     def close_all(self) -> None:
-        while True:
-            try:
-                conn = self._idle_connections.get_nowait()
-            except Empty:
-                break
-            self._discard_connection(conn)
+        with self._condition:
+            self._closed = True
+            idle, self._idle = self._idle, []
+            self._total_connections -= len(idle)
+            self._condition.notify_all()
+        for conn in idle:
+            self._close(conn)
 
-    def _discard_connection(self, conn: Any) -> None:
+    @staticmethod
+    def _close(conn: Any) -> None:
         try:
             conn.close()
-        finally:
-            self._total_connections = max(self._total_connections - 1, 0)
+        except Exception:
+            logger.debug("Connection close failed", exc_info=True)
 
 
 class DatabaseClient:
@@ -105,7 +149,11 @@ class DatabaseClient:
         slow_query_threshold_ms: float | None = None,
         time_fn: Callable[[], float] | None = None,
         connection_pool: DatabaseConnectionPool | None = None,
+        runtime_config: dict[str, Any] | None = None,
+        limits: ExecutionLimits | None = None,
     ):
+        runtime_config = DB_RUNTIME_CONFIG if runtime_config is None else runtime_config
+        self.limits = limits or ExecutionLimits.from_config(runtime_config)
         self.source_id = source_id or APP_CONFIG["database"]["default_source"]
         self.config = db_config or get_database_source_config(self.source_id)
         self.security = security_manager or QuerySecurityManager()
@@ -113,7 +161,7 @@ class DatabaseClient:
         self.slow_query_threshold_ms = (
             slow_query_threshold_ms
             if slow_query_threshold_ms is not None
-            else DB_RUNTIME_CONFIG["slow_query_threshold_ms"]
+            else runtime_config.get("slow_query_threshold_ms", 200)
         )
         self.connection_factory = connection_factory
         self.connection_pool = connection_pool
@@ -122,9 +170,9 @@ class DatabaseClient:
         if self.connection_factory is None and self.connection_pool is None:
             self.connection_pool = DatabaseConnectionPool(
                 connection_factory=lambda: pymysql.connect(**self._connection_kwargs()),
-                pool_size=DB_RUNTIME_CONFIG["pool_size"],
-                max_overflow=DB_RUNTIME_CONFIG["max_overflow"],
-                pool_timeout=DB_RUNTIME_CONFIG["pool_timeout"],
+                pool_size=runtime_config.get("pool_size", 5),
+                max_overflow=runtime_config.get("max_overflow", 5),
+                pool_timeout=runtime_config.get("pool_timeout", 3),
             )
 
     def execute(
@@ -144,43 +192,99 @@ class DatabaseClient:
         result = self.execute_query(sql, user)
         return result.columns, result.rows
 
-    def execute_query(self, sql: str, user: UserContext | None = None) -> QueryExecutionResult:
+    def execute_query(self, sql: str, user: UserContext | None = None,
+                      budget: ExecutionBudget | None = None) -> QueryExecutionResult:
         """返回独立执行结果；兼容 execute 的二元组接口也经过相同安全入口。"""
-        return self.executor.execute(sql, user)
+        return self.executor.execute(sql, user, budget)
 
     def _execute_secured(
-        self, input_sql: str, secured_sql: str, context: ExecutionContext,
+        self, input_sql: str, secured_sql: str, context: ExecutionContext, budget: ExecutionBudget,
     ) -> QueryExecutionResult:
         started_at = self.time_fn()
-        conn = None
+        sql_timeout_ms = min(self.limits.sql_timeout_ms, budget.start_execution())
+        conn = cursor = None
+        reusable = False
         try:
-            conn = self._acquire_connection()
-            with conn.cursor() as cursor:
-                cursor.execute(secured_sql)
-                columns = [desc[0] for desc in cursor.description] if cursor.description else []
-                results = cursor.fetchall()
-                duration_ms = round((self.time_fn() - started_at) * 1000, 2)
-                explain_plan = self._explain(cursor, secured_sql, duration_ms)
-                if explain_plan:
-                    logger.warning(
-                        "Slow query detected: duration_ms=%s source_id=%s",
-                        duration_ms,
-                        context.source_id,
-                    )
-                _, masked_rows = self.security.mask_result(columns, results, context.to_user())
-                return QueryExecutionResult(
-                    input_sql=input_sql, executed_sql=secured_sql, source_id=context.source_id,
-                    columns=columns, rows=masked_rows, duration_ms=duration_ms, explain_plan=explain_plan,
-                )
+            conn = self._acquire_connection(timeout=budget.remaining())
+            sql_timeout_ms = max(1, min(sql_timeout_ms, int(budget.remaining() * 1000)))
+            self._set_socket_timeout(conn, budget, sql_timeout_ms)
+            # session 设置只能由执行器产生，模型输出中的 SET/优化器提示仍被拒绝。
+            with conn.cursor() as setup:
+                setup.execute("SET SESSION TRANSACTION READ ONLY")
+                setup.execute(f"SET SESSION max_execution_time = {sql_timeout_ms}")
+            cursor = conn.cursor(pymysql.cursors.SSCursor)
+            self._set_socket_timeout(conn, budget, sql_timeout_ms)
+            cursor.execute(secured_sql)
+            columns = [desc[0] for desc in cursor.description] if cursor.description else []
+            results, result_bytes = self._read_result(cursor, columns, conn, budget, sql_timeout_ms)
+            duration_ms = round((self.time_fn() - started_at) * 1000, 2)
+            explain_plan = self._explain(conn, secured_sql, duration_ms, budget)
+            budget.remaining()
+            _, masked_rows = self.security.mask_result(columns, results, context.to_user())
+            reusable = True
+            return QueryExecutionResult(
+                input_sql=input_sql, executed_sql=secured_sql, source_id=context.source_id,
+                columns=columns, rows=masked_rows, duration_ms=duration_ms, explain_plan=explain_plan,
+                result_bytes=result_bytes, sql_timeout_ms=sql_timeout_ms,
+                slow_query=duration_ms >= self.slow_query_threshold_ms,
+            )
         except (pymysql.MySQLError, OSError) as exc:
             duration_ms = round((self.time_fn() - started_at) * 1000, 2)
             raise self._translate_db_error(exc, secured_sql, duration_ms) from exc
         finally:
             if conn is not None:
-                self._release_connection(conn)
+                if not reusable:
+                    # SSCursor.close() 会读完剩余结果；先断开连接再清理，不能在超限时继续排空。
+                    self._release_connection(conn, reusable=False)
+                    if isinstance(conn, pymysql.connections.Connection):
+                        result = getattr(conn, "_result", None)
+                        if result is not None:
+                            result.unbuffered_active = False
+                            result.connection = None
+                        if cursor is not None:
+                            cursor.connection = None
+                if cursor is not None:
+                    try:
+                        cursor.close()
+                    except BaseException:
+                        if reusable:
+                            self._release_connection(conn, reusable=False)
+                        raise
+                if reusable:
+                    self._release_connection(conn)
+
+    def _read_result(self, cursor, columns, conn, budget, sql_timeout_ms):
+        max_rows = min(self.limits.max_rows, budget.limits.max_rows)
+        max_bytes = min(self.limits.max_result_bytes, budget.limits.max_result_bytes)
+        size = len(json.dumps({"columns": columns, "rows": []}, ensure_ascii=False).encode("utf-8"))
+        if size > max_bytes:
+            raise QueryExecutionError("result_limit", "结果列信息超过字节限制，请减少返回字段。")
+        budget.consume_result_bytes(size)
+        rows = []
+        while True:
+            self._set_socket_timeout(conn, budget, sql_timeout_ms)
+            row = cursor.fetchone()
+            budget.remaining()
+            if row is None:
+                break
+            if len(rows) >= max_rows:
+                raise QueryExecutionError("result_limit", f"结果超过 {max_rows} 行限制，请增加筛选条件或使用聚合。")
+            row_size = len(json.dumps(dict(zip(columns, row)), ensure_ascii=False, default=str).encode("utf-8")) + 2
+            if size + row_size > max_bytes:
+                raise QueryExecutionError("result_limit", f"结果超过 {max_bytes} 字节限制，请减少返回字段或缩小范围。")
+            budget.consume_result_bytes(row_size)
+            rows.append(tuple(row))
+            size += row_size
+        return rows, size
+
+    @staticmethod
+    def _set_socket_timeout(conn, budget, sql_timeout_ms):
+        remaining = min(budget.remaining(), sql_timeout_ms / 1000 + 0.5)
+        if isinstance(conn, pymysql.connections.Connection):
+            conn._read_timeout = remaining
+            conn._write_timeout = remaining
 
     def validate_connection(self) -> bool:
-        """验证数据库连接是否正常"""
         try:
             conn = self._acquire_connection()
             self._release_connection(conn)
@@ -188,41 +292,42 @@ class DatabaseClient:
         except Exception:
             return False
 
-    def _acquire_connection(self) -> Any:
+    def close(self) -> None:
         if self.connection_pool is not None:
-            return self.connection_pool.acquire()
+            self.connection_pool.close_all()
+
+    def _acquire_connection(self, timeout: float | None = None) -> Any:
+        if self.connection_pool is not None:
+            return self.connection_pool.acquire(timeout)
         if self.connection_factory is None:
             raise RuntimeError("数据库连接工厂未初始化")
         return self.connection_factory()
 
-    def _release_connection(self, conn: Any) -> None:
+    def _release_connection(self, conn: Any, reusable: bool = True) -> None:
         if self.connection_pool is not None:
-            self.connection_pool.release(conn)
+            self.connection_pool.release(conn, reusable=reusable)
         else:
-            conn.close()
+            DatabaseConnectionPool._close(conn)
 
     def _connection_kwargs(self) -> dict[str, Any]:
-        return {
-            key: value
-            for key, value in self.config.items()
-            if key not in {"driver", "name"}
-        }
+        return {key: value for key, value in self.config.items() if key not in {"driver", "name"}}
 
-    def _explain(self, cursor: Any, sql: str, duration_ms: float) -> list[dict[str, Any]]:
+    def _explain(self, conn, sql: str, duration_ms: float, budget: ExecutionBudget) -> list[dict[str, Any]]:
         if duration_ms < self.slow_query_threshold_ms:
             return []
-        if not sql.lstrip().upper().startswith(("SELECT", "WITH")):
-            return []
+        # 诊断也服从剩余预算；EXPLAIN 最多读取 100 行，不调用 fetchall。
         try:
-            cursor.execute(f"EXPLAIN {sql}")
-            explain_columns = [desc[0] for desc in cursor.description] if cursor.description else []
-            explain_rows = cursor.fetchall()
-            return [
-                dict(zip(explain_columns, row))
-                for row in explain_rows
-            ]
-        except Exception as exc:
-            logger.warning("Failed to capture EXPLAIN plan: %s", exc)
+            budget.remaining()
+            self._set_socket_timeout(conn, budget, self.limits.sql_timeout_ms)
+            with conn.cursor() as cursor:
+                cursor.execute(f"EXPLAIN {sql}")
+                columns = [desc[0] for desc in cursor.description] if cursor.description else []
+                rows = cursor.fetchmany(100)
+                return [dict(zip(columns, row)) for row in rows]
+        except BudgetExceeded:
+            raise
+        except Exception:
+            logger.debug("Failed to capture EXPLAIN plan", exc_info=True)
             return []
 
     def _translate_db_error(

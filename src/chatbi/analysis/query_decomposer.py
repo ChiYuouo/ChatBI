@@ -166,13 +166,15 @@ class QueryDecomposer:
 
     def _generate_response(self, system_msg: str, prompt: str) -> str:
         """默认通过 LLM 生成 JSON 结果。"""
-        response = self.llm.client.chat.completions.create(
+        client = self.llm.request_client() if isinstance(self.llm, LLMClient) else self.llm.client
+        response = client.chat.completions.create(
             model=self.llm.model,
             messages=[
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": prompt},
             ],
             temperature=0,
+            max_tokens=self.llm.max_tokens,
             response_format={"type": "json_object"},
         )
         content = response.choices[0].message.content

@@ -22,13 +22,25 @@ class ExplainableCursor:
     def __exit__(self, exc_type, exc, tb):
         return False
 
+    def close(self):
+        pass
+
     def execute(self, sql: str):
+        if sql.startswith("SET "):
+            return
         self.executed_sqls.append(sql)
         self._last_sql = sql
+        self._remaining = iter(self.fetchall())
         if sql.startswith("EXPLAIN "):
             self.description = [("id",), ("select_type",), ("table",), ("type",), ("key",)]
         else:
             self.description = [("region",), ("revenue",)]
+
+    def fetchone(self):
+        return next(self._remaining, None)
+
+    def fetchmany(self, size):
+        return self.fetchall()[:size]
 
     def fetchall(self):
         if self._last_sql.startswith("EXPLAIN "):
@@ -43,7 +55,12 @@ class SyntaxErrorCursor:
     def __exit__(self, exc_type, exc, tb):
         return False
 
+    def close(self):
+        pass
+
     def execute(self, sql: str):
+        if sql.startswith("SET "):
+            return
         raise pymysql.err.ProgrammingError(1064, "You have an error in your SQL syntax")
 
     def fetchall(self):
@@ -57,7 +74,12 @@ class TimedOutCursor:
     def __exit__(self, exc_type, exc, tb):
         return False
 
+    def close(self):
+        pass
+
     def execute(self, sql: str):
+        if sql.startswith("SET "):
+            return
         raise pymysql.err.OperationalError(
             2013,
             "Lost connection to MySQL server during query (The read operation timed out)",
@@ -72,7 +94,7 @@ class FakeConnection:
         self._cursor = cursor
         self.closed = False
 
-    def cursor(self):
+    def cursor(self, cursorclass=None):
         return self._cursor
 
     def close(self):
@@ -177,7 +199,7 @@ def test_chatbi_system_returns_granular_database_error_type_for_timeout():
             return "SELECT * FROM sales_orders"
 
     class FakeDB:
-        def execute_query(self, sql: str, user=None):
+        def execute_query(self, sql: str, user=None, budget=None):
             raise QueryExecutionError(
                 "query_timeout",
                 "SQL 执行超时，请缩小时间范围后重试",

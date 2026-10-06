@@ -9,6 +9,7 @@ from typing import Generator
 
 from openai import OpenAI
 from chatbi.core.config import LLM_CONFIG
+from chatbi.execution.budget import ExecutionBudget, request_timeout
 
 
 class LLMClient:
@@ -17,7 +18,9 @@ class LLMClient:
     def __init__(self):
         self.client = OpenAI(
             api_key=LLM_CONFIG["api_key"],
-            base_url=LLM_CONFIG["base_url"]
+            base_url=LLM_CONFIG["base_url"],
+            timeout=LLM_CONFIG["timeout_seconds"],
+            max_retries=0,
         )
 
         self.model = LLM_CONFIG["model"]
@@ -25,7 +28,7 @@ class LLMClient:
         self.max_tokens = LLM_CONFIG["max_tokens"]
         self.embedding_model = LLM_CONFIG["embedding_model"]
 
-    def generate_sql(self, system_msg: str, prompt: str) -> str:
+    def generate_sql(self, system_msg: str, prompt: str, *, budget: ExecutionBudget | None = None) -> str:
         """
         调用 LLM 生成 SQL（同步，一次性返回）
 
@@ -36,14 +39,23 @@ class LLMClient:
         Returns:
             提取后的纯 SQL 字符串
         """
-        raw_output = self.generate_text(system_msg=system_msg, prompt=prompt)
+        raw_output = self.generate_text(system_msg=system_msg, prompt=prompt, budget=budget)
 
         # 提取 SQL：去除 markdown 代码块标记
         sql = re.sub(r'```sql|```', '', raw_output).strip()
 
         return sql
 
-    def generate_text(self, system_msg: str, prompt: str) -> str:
+    def request_client(self, budget: ExecutionBudget | None = None):
+        timeout = request_timeout(LLM_CONFIG["timeout_seconds"])
+        if budget is not None:
+            timeout = min(timeout, budget.remaining())
+        return self.client.with_options(timeout=timeout, max_retries=0)
+
+    def close(self) -> None:
+        self.client.close()
+
+    def generate_text(self, system_msg: str, prompt: str, *, budget: ExecutionBudget | None = None) -> str:
         """
         调用 LLM 生成普通文本（同步，一次性返回）
 
@@ -54,7 +66,7 @@ class LLMClient:
         Returns:
             模型返回的原始文本内容
         """
-        response = self.client.chat.completions.create(
+        response = self.request_client(budget).chat.completions.create(
             model=self.model,
             messages=[
                 {"role": "system", "content": system_msg},
@@ -65,10 +77,10 @@ class LLMClient:
         )
         return response.choices[0].message.content.strip()
 
-    def generate_sql_stream(self, system_msg: str, prompt: str) -> Generator[str,
+    def generate_sql_stream(self, system_msg: str, prompt: str, *, budget: ExecutionBudget | None = None) -> Generator[str,
     None, None]:
         """调用 LLM 流式生成 SQL（逐 chunk 产出）"""
-        stream = self.client.chat.completions.create(
+        stream = self.request_client(budget).chat.completions.create(
             model=self.model,
             messages=[
                 {"role": "system", "content": system_msg},
@@ -78,10 +90,15 @@ class LLMClient:
             max_tokens=self.max_tokens,
             stream=True,
         )
-        for chunk in stream:
-            delta_content = chunk.choices[0].delta.content
-            if delta_content is not None:
-                yield delta_content
+        try:
+            for chunk in stream:
+                if budget is not None:
+                    budget.remaining()
+                delta_content = chunk.choices[0].delta.content
+                if delta_content is not None:
+                    yield delta_content
+        finally:
+            stream.close()
 
     def get_embedding(self, text: str) -> list[float]:
         resp = self.client.embeddings.create(

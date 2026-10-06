@@ -9,6 +9,7 @@
 
 from pathlib import Path
 from langchain_openai import OpenAIEmbeddings
+from chatbi.execution.budget import request_timeout
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from chatbi.core.config import LLM_CONFIG
@@ -127,6 +128,8 @@ def get_embeddings() -> OpenAIEmbeddings:
         api_key=LLM_CONFIG["api_key"],
         check_embedding_ctx_length=False,
         chunk_size=10,
+        request_timeout=request_timeout(LLM_CONFIG["timeout_seconds"]),
+        max_retries=0,
     )
 
 

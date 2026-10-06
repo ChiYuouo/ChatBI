@@ -19,7 +19,7 @@ def test_build_runtime_uses_requested_database_source(monkeypatch):
         pass
 
     class FakeDatabaseClient:
-        def __init__(self, db_config=None, source_id=None):
+        def __init__(self, db_config=None, source_id=None, runtime_config=None):
             captured["db_config"] = db_config
             captured["source_id"] = source_id
 
@@ -64,7 +64,7 @@ def test_chatbi_system_run_uses_runtime_factory_for_source_id():
             return "SELECT 1"
 
     class FakeDB:
-        def execute_query(self, sql: str, user=None):
+        def execute_query(self, sql: str, user=None, budget=None):
             captured["sql"] = sql
             captured["user"] = user
             return QueryExecutionResult(sql, sql, "finance_pg", ["value"], [(1,)], 12.5)
@@ -99,3 +99,18 @@ def test_chatbi_system_run_uses_runtime_factory_for_source_id():
     assert result["success"] is True
     assert captured["source_id"] == "finance_pg"
     assert result["metadata"]["source_id"] == "finance_pg"
+
+
+def test_chatbi_system_reuses_source_runtime_and_closes_all_pools():
+    from chatbi.services.chatbi_service import ChatBISystem
+    created, closed = [], []
+    def factory(config, source_id=None):
+        source = source_id or "default"
+        created.append(source)
+        return SimpleNamespace(source_id=source, parser=None, formatter=None, indicator_knowledge=None,
+            db=SimpleNamespace(close=lambda: closed.append(source)), llm=SimpleNamespace())
+    system = ChatBISystem(app_config={"features": {}}, runtime_factory=factory)
+    assert system._get_runtime("another") is system._get_runtime("another")
+    assert created == ["default", "another"]
+    system.close()
+    assert closed == ["default", "another"]
