@@ -96,9 +96,9 @@ expense_date >= '2026-01-01' AND expense_date < '2026-04-01';
 问题：查看最近三个月各月销售收入
 SQL：SELECT
     DATE_FORMAT(o.order_date, '%Y-%m-01') AS month,
-    SUM(o.net_amount * r.rate_to_cny) AS revenue_cny
+    SUM(o.net_amount * CASE WHEN o.currency = 'CNY' THEN 1 ELSE r.rate_to_cny END) AS revenue_cny
 FROM sales_orders o
-JOIN exchange_rates r
+LEFT JOIN exchange_rates r
   ON o.order_date = r.rate_date
  AND o.currency = r.currency
 WHERE o.order_status = 'completed'
@@ -115,11 +115,11 @@ SQL：SELECT
     COALESCE(e.total_expense, 0) AS total_expense
 FROM (
     SELECT DATE_FORMAT(o.order_date, '%Y-%m-01') AS month,
-           SUM(o.net_amount * r.rate_to_cny)
+           SUM(o.net_amount * CASE WHEN o.currency = 'CNY' THEN 1 ELSE r.rate_to_cny END)
              - SUM((p.material_cost + p.labor_cost) * o.quantity) AS gross_profit
     FROM sales_orders o
     JOIN dim_products p ON o.product_id = p.product_id
-    JOIN exchange_rates r ON o.order_date = r.rate_date AND o.currency = r.currency
+    LEFT JOIN exchange_rates r ON o.order_date = r.rate_date AND o.currency = r.currency
     WHERE o.order_status = 'completed'
     GROUP BY DATE_FORMAT(o.order_date, '%Y-%m-01')
 ) g
@@ -140,17 +140,22 @@ RULES = """
 
 1. 收入口径："销售额""收入"均指不含税收入，统一使用
    sales_orders.net_amount，禁止使用 gross_amount
-2. 成本口径："成本"指实际销售成本，计算公式为 dim_products.material_cost +
-   dim_products.labor_cost
+2. 成本口径：使用产品当前人民币材料成本和人工成本估算销售成本，
+   公式为 (dim_products.material_cost + dim_products.labor_cost) * quantity；没有历史成本快照
 3. 订单统计范围：统计收入、订单量、客单价等指标时，必须过滤 order_status =
    'completed'，排除 cancelled 和 pending
 4. 汇率转换：涉及多币种收入汇总时，必须通过 order_date 和 currency 关联
-   exchange_rates 表，使用 rate_to_cny 折算为人民币
+   exchange_rates 表（LEFT JOIN），人民币使用 1，外币使用 rate_to_cny。
+   使用 CASE WHEN o.currency = 'CNY' THEN 1 ELSE r.rate_to_cny END；
+   禁止用 COALESCE(rate_to_cny, 0/1) 或汇率字段过滤掩盖缺失
 5. 时间范围："最近 N 个月"使用 DATE_SUB(CURDATE(), INTERVAL N MONTH)
    作为起始边界；"本月"指当月 1 日至当前日期
 6. 费用层级：selling_expense 是销售费用总项，包含 marketing_expense、
    logistics_expense、warranty_expense，汇总时不得重复计算
-7. 毛利计算：毛利 = net_amount - (material_cost + labor_cost) * quantity
+7. 毛利计算：毛利 = 人民币收入 - 估算销售成本；收入先换汇再减人民币成本
+   简化经营利润 = 毛利 - 期间费用，不等同于会计净利润或完整营业利润。
+   订单与费用在同一数据库，必须分别聚合后按同一期间相减，可使用子查询或 CTE；
+   禁止直接关联两张事实表的明细，否则会重复计算。没有费用分摊时不计算产品线/区域经营利润
 8. 不要引用 Schema 中不存在的字段，例如 channel
 """
 
@@ -163,7 +168,7 @@ ERROR_GUARDS = """
 - 字段选择：确认金额字段是 net_amount（不含税）还是 gross_amount（含
   税），除非明确要求"含税"，否则一律用 net_amount
 - Join 遗漏：只要查询涉及"收入"且存在 currency 字段，必须关联
-  exchange_rates 表做汇率转换
+  exchange_rates 表（LEFT JOIN）做汇率转换；人民币使用 1，外币必须使用有效汇率，不能默认补 0 或 1
 - 过滤遗漏：所有收入类统计必须包含 WHERE order_status = 'completed'
 - 时间边界：使用 >= 和 < 组合表示闭开区间；“最近N个月”按 DATE_SUB(CURDATE(), INTERVAL N MONTH) 处理
 - 聚合维度（重要）：MySQL 8 默认启用 ONLY_FULL_GROUP_BY，SELECT / HAVING / ORDER BY
@@ -278,7 +283,8 @@ def build_prompt(
 3. 确保字段名和表名与 Schema 一致
 4. 如果涉及多表查询，使用 JOIN 连接
 5. 收入口径统一使用 net_amount，成本口径使用 material_cost + labor_cost
-6. 统计销售额时，需要按订单日期的汇率转换为人民币
+6. 统计销售额时，LEFT JOIN 汇率表；人民币直接计入，外币按订单日期和币种的有效汇率转换为人民币，不得将缺失外币汇率默认补成 0 或 1
+   使用 CASE WHEN o.currency = 'CNY' THEN 1 ELSE r.rate_to_cny END
 7. SQL 必须完整闭合，CTE、SELECT、GROUP BY、ORDER BY 不得省略，不要输出截断的半句 SQL
 """
 

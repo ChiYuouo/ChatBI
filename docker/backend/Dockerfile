@@ -21,13 +21,8 @@ COPY src/ ./src/
 COPY api_service.py ./
 RUN uv sync --frozen --no-dev
 
-# 以下是运行时真实依赖，缺失会在启动或检索时报错：
-#   indicators.json      指标知识（相对 CWD 读取，必须在 /app 下）
-#   indicators_full.json 指标目录（query_decomposer 用 parents[3] 绝对寻址）
-#   chroma_db/           Schema Linking 与指标 RAG 的向量索引
-#   data/                评测用例等数据
-COPY indicators.json indicators_full.json ./
-COPY chroma_db/ ./chroma_db/
+# 索引由初始化命令创建并持久化，构建不依赖本机索引或模型调用。
+COPY indicators_full.json ./
 COPY data/ ./data/
 
 ENV PATH="/app/.venv/bin:$PATH"

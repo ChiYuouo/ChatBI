@@ -7,17 +7,15 @@
 依赖安装：uv add langchain-openai langchain-chroma chromadb
 """
 
-from pathlib import Path
 from langchain_openai import OpenAIEmbeddings
 from chatbi.execution.budget import request_timeout
 from langchain_chroma import Chroma
-from langchain_core.documents import Document
-from chatbi.core.config import LLM_CONFIG
+from chatbi.core.config import CHROMA_ROOT, LLM_CONFIG
 
 
 # ==================== 表描述数据 ====================
 # 每张表构建一段结构化的"自然语言描述"用于向量化检索
-# 包含 5 张业务相关表 + 4 张不相关表，验证检索的区分能力
+# 仅包含当前已接入的业务表；测试干扰项不进入运行索引
 TABLE_METADATA = {
     # ---- 业务相关表 ----
     "dim_customers": {
@@ -68,45 +66,11 @@ TABLE_METADATA = {
         "domain": "事实表",
         "key_fields": "expense_id, expense_date, department, rd_expense, selling_expense, admin_expense, finance_expense, marketing_expense, logistics_expense, warranty_expense",
     },
-    # ---- 不相关表（用于验证检索区分能力）----
-    "hr_attendance_records": {
-        "description": (
-            "人力考勤表：记录员工每日上下班打卡、请假、加班、排班班次和异常考勤。"
-            "用于 HR 出勤统计、缺勤分析和薪资核算，不参与销售收入或产品利润分析。"
-        ),
-        "domain": "HR系统",
-        "key_fields": "record_id, employee_id, check_in_time, check_out_time, attendance_status, shift_type",
-    },
-    "iot_device_alerts": {
-        "description": (
-            "IoT 设备告警表：记录工厂设备、传感器、产线控制器上报的温度异常、"
-            "震动异常、离线告警和维护工单。用于设备运维监控与预测性维护，"
-            "不用于客户、订单、费用或汇率分析。"
-        ),
-        "domain": "设备运维",
-        "key_fields": "alert_id, device_id, alert_type, severity, alert_time, resolution_status",
-    },
-    "legal_contract_archive": {
-        "description": (
-            "法务合同档案表：存储合同编号、签署主体、法务审核意见、诉讼状态、"
-            "保密条款和履约风险评级。用于合同管理与法务合规，不用于销售分析。"
-        ),
-        "domain": "法务系统",
-        "key_fields": "contract_id, contract_no, party_name, legal_opinion, litigation_status, risk_rating",
-    },
-    "warehouse_temperature_logs": {
-        "description": (
-            "仓储温湿度日志表：记录仓库各货位每小时温度、湿度、冷链设备状态和巡检结果。"
-            "用于仓储环境监控和质量追溯，不用于收入、毛利、客户或费用统计。"
-        ),
-        "domain": "仓储管理",
-        "key_fields": "log_id, warehouse_id, location_code, temperature, humidity, equipment_status",
-    },
 }
 
 
 # ==================== ChromaDB 持久化目录 ====================
-CHROMA_PERSIST_DIR = str(Path(__file__).resolve().parents[3] / "chroma_db" / "tables")
+CHROMA_PERSIST_DIR = str(CHROMA_ROOT / "tables")
 
 
 def _cosine_relevance_score_fn(distance: float) -> float:
@@ -155,49 +119,9 @@ def get_vectorstore() -> Chroma:
 
 # ==================== 索引构建 ====================
 def build_index(force_rebuild: bool = False) -> Chroma:
-    """
-    将表描述向量化并写入 ChromaDB。
-
-    如果持久化目录已存在且 force_rebuild=False，则直接加载已有索引。
-    如果需要重建（如表描述更新），传入 force_rebuild=True。
-
-    Returns:
-        Chroma 向量存储实例
-    """
-    vectorstore = get_vectorstore()
-
-    # 检查是否已有数据
-    existing = vectorstore._collection.count()
-    if existing > 0 and not force_rebuild:
-        print(f"已有索引数据（{existing} 条），跳过重建。如需重建请传入 force_rebuild=True")
-        return vectorstore
-
-    # 清空旧数据（如果 force_rebuild）
-    if force_rebuild and existing > 0:
-        # ChromaDB 较新版本不支持空 where 过滤，用 delete 逐个删除
-        existing_ids = vectorstore._collection.get()["ids"]
-        if existing_ids:
-            vectorstore._collection.delete(ids=existing_ids)
-        print("已清空旧索引数据")
-
-    # 构建 Document 列表
-    documents = []
-    for table_name, meta in TABLE_METADATA.items():
-        doc = Document(
-            page_content=meta["description"],
-            metadata={
-                "table_name": table_name,
-                "domain": meta["domain"],
-                "key_fields": meta["key_fields"],
-            },
-        )
-        documents.append(doc)
-
-    # 写入向量数据库
-    vectorstore.add_documents(documents, ids=list(TABLE_METADATA.keys()))
-    print(f"索引构建完成：{len(documents)} 张表已写入 ChromaDB")
-    print(f"持久化路径：{CHROMA_PERSIST_DIR}")
-    return vectorstore
+    """通过统一入口识别版本并按需构建索引。"""
+    from chatbi.retrieval.index_manager import ensure_index
+    return ensure_index("tables", force_rebuild)
 
 
 # ==================== 表召回检索 ====================

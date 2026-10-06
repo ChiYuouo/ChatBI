@@ -61,7 +61,7 @@ def _resolve_query_options(payload: QueryRequest, app_config: dict) -> dict[str,
         "use_query_rewrite": (
             payload.use_query_rewrite
             if payload.use_query_rewrite is not None
-            else feature_defaults.get("query_rewrite", True)
+            else feature_defaults.get("query_rewrite", False)
         ),
     }
 
@@ -69,32 +69,30 @@ def _resolve_query_options(payload: QueryRequest, app_config: dict) -> dict[str,
 def _resolve_analyze_options(payload: AnalyzeRequest, app_config: dict) -> dict[str, bool]:
     """解析归因链路的子步骤执行选项。
 
-    归因链路由多个子步骤组成，每次子步骤都要走一遍检索与指标注入，
-    因此这里默认开启 Schema Linking 与指标 RAG 以提升 SQL 质量，
-    可通过请求参数或环境变量单独关闭。
+    归因子步骤沿用显式功能配置，请求参数可以覆盖。
     """
     feature_defaults = app_config.get("features", {})
     return {
         "use_indicator_knowledge": (
             payload.use_indicator_knowledge
             if payload.use_indicator_knowledge is not None
-            else feature_defaults.get("indicator_knowledge", True)
+            else feature_defaults.get("indicator_knowledge", False)
         ),
         "use_schema_linking": (
             payload.use_schema_linking
             if payload.use_schema_linking is not None
-            else feature_defaults.get("schema_linking", True)
+            else feature_defaults.get("schema_linking", False)
         ),
         "use_indicator_rag": (
             payload.use_indicator_rag
             if payload.use_indicator_rag is not None
-            else feature_defaults.get("indicator_rag", True)
+            else feature_defaults.get("indicator_rag", False)
         ),
     }
 
 
 # 无需登录即可访问的路径
-_PUBLIC_PATHS = frozenset({"/", "/health", "/api/v1/login", "/api/v1/register"})
+_PUBLIC_PATHS = frozenset({"/", "/health", "/live", "/api/v1/login", "/api/v1/register"})
 # 文档类前缀（FastAPI 自带的 Swagger / OpenAPI）
 _PUBLIC_PREFIXES = ("/docs", "/openapi", "/redoc")
 

@@ -29,6 +29,24 @@ services:
       retries: 30
       start_period: 40s
 
+  # ---------- 索引：首次启动或定义/Embedding 配置变更时初始化 ----------
+  index-init:
+    build:
+      context: .
+      dockerfile: docker/backend/Dockerfile
+    image: chatbi-backend:latest
+    command: ["python", "-m", "chatbi.tools.init_indexes"]
+    environment:
+      CHROMA_PERSIST_DIR: /app/chroma_db
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-v3}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-30}
+      FEATURE_SCHEMA_LINKING: ${FEATURE_SCHEMA_LINKING:-false}
+      FEATURE_INDICATOR_RAG: ${FEATURE_INDICATOR_RAG:-false}
+    volumes:
+      - chatbi-index-data:/app/chroma_db
+
   # ---------- 后端：FastAPI + ChromaDB ----------
   backend:
     build:
@@ -40,6 +58,8 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+      index-init:
+        condition: service_completed_successfully
     environment:
       # 容器内走 compose 网络，主机名就是服务名 mysql
       DB_HOST: mysql
@@ -47,6 +67,11 @@ services:
       DB_USER: ${DB_USER:-chatbi_reader}
       DB_PASSWORD: ${DB_PASSWORD}
       DB_NAME: ${DB_NAME:-chatbi_mvp}
+      CHROMA_PERSIST_DIR: /app/chroma_db
+      DB_CONNECT_TIMEOUT: ${DB_CONNECT_TIMEOUT:-5}
+      DB_READ_TIMEOUT: ${DB_READ_TIMEOUT:-8}
+      DB_WRITE_TIMEOUT: ${DB_WRITE_TIMEOUT:-8}
+      DB_SLOW_QUERY_THRESHOLD_MS: ${DB_SLOW_QUERY_THRESHOLD_MS:-200}
       DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
       DB_POOL_MAX_OVERFLOW: ${DB_POOL_MAX_OVERFLOW:-5}
       DB_POOL_TIMEOUT: ${DB_POOL_TIMEOUT:-3}
@@ -82,6 +107,7 @@ services:
     volumes:
       # Persist SQLite session history on the host so it survives container rebuilds
       - ./data:/app/data
+      - chatbi-index-data:/app/chroma_db
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     healthcheck:
@@ -105,9 +131,10 @@ services:
     restart: unless-stopped
     depends_on:
       backend:
-        condition: service_started
+        condition: service_healthy
     ports:
       - "${FRONTEND_PORT:-8300}:80"
 
 volumes:
   chatbi-mysql-data:
+  chatbi-index-data:

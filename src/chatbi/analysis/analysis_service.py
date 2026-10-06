@@ -32,6 +32,7 @@ from chatbi.core.security import QuerySecurityManager, SecurityError, UserContex
 from chatbi.services.chatbi_service import ChatBISystem
 from chatbi.execution.budget import BudgetExceeded, ExecutionBudget, ExecutionLimits, budgeted_events
 from chatbi.execution.budgeted_llm import BudgetedLLM
+from chatbi.retrieval.index_manager import IndexNotReady, require_indexes
 
 logger = logging.getLogger("chatbi.analysis")
 
@@ -119,6 +120,8 @@ class AnalysisService:
             yield from budgeted_events(self._run_stream_events(*args, execution_budget=budget, resources=resources, **kwargs), budget)
         except BudgetExceeded as exc:
             yield "error", {"error": str(exc), "error_type": "database_budget_exceeded"}
+        except IndexNotReady as exc:
+            yield "error", {"error": str(exc), "error_type": "retrieval_not_ready"}
         finally:
             for runtime in resources:
                 for resource in (runtime.db, runtime.llm):
@@ -163,11 +166,14 @@ class AnalysisService:
         except SecurityError as exc:
             yield "error", {"error": str(exc), "error_type": "security"}
             return
-        run_options = chatbi_run_options or {
-            "use_schema_linking": True,
-            "use_indicator_rag": True,
-            "use_indicator_knowledge": True,
+        features = self.app_config.get("features", {})
+        run_options = {
+            "use_schema_linking": features.get("schema_linking", False),
+            "use_indicator_rag": features.get("indicator_rag", False),
+            "use_indicator_knowledge": features.get("indicator_knowledge", False),
+            **{key: value for key, value in (chatbi_run_options or {}).items() if value is not None},
         }
+        require_indexes({"schema_linking": run_options["use_schema_linking"], "indicator_rag": run_options["use_indicator_rag"]})
 
         # 整条链路复用同一个 runtime，避免每个子步骤各建一个数据库连接池
         runtime = self.runtime_factory(self.app_config, source_id=source_id)
@@ -175,7 +181,7 @@ class AnalysisService:
         execution_budget.remaining()
         runtime = copy(runtime)
         runtime.llm = BudgetedLLM(runtime.llm, execution_budget)
-        system = ChatBISystem(runtime=runtime)
+        system = ChatBISystem(runtime=runtime, app_config=self.app_config)
         decomposer, report_generator = self._bind_llm(runtime)
 
         yield "start", {
@@ -239,7 +245,7 @@ class AnalysisService:
                 step_results.append(normalized)
                 results_by_step[data["step_id"]] = normalized
                 yield "step_done", data
-                if data.get("error_type") in {"database_budget_exceeded", "database_result_limit", "database_query_timeout"}:
+                if data.get("error_type") in {"database_budget_exceeded", "database_result_limit", "database_query_timeout", "retrieval_not_ready"}:
                     yield "error", {"error": data.get("error"), "error_type": data["error_type"]}
                     return
         except BudgetExceeded:

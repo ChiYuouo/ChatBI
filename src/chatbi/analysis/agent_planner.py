@@ -440,7 +440,7 @@ class StepExecutor:
                 step.depends_on,
                 results_by_step,
             )
-            composed_question = self._compose_question(step.question, dependency_context)
+            composed_question = self._compose_question(step.question, dependency_context, plan.original_question)
             normalized = self._execute_with_retry(
                 step=step,
                 question=composed_question,
@@ -456,7 +456,7 @@ class StepExecutor:
                 _print_progress(
                     f"{step.step_id} 执行完成：{step.step_name}"
                 )
-            elif self.failure_policy == "abort":
+            elif self.failure_policy == "abort" or normalized.error_type == "retrieval_not_ready":
                 _print_progress(
                     f"{step.step_id} 执行失败：{normalized.error or '未知错误'}"
                 )
@@ -543,7 +543,7 @@ class StepExecutor:
                 step.depends_on,
                 results_by_step,
             )
-            composed_question = self._compose_question(step.question, dependency_context)
+            composed_question = self._compose_question(step.question, dependency_context, plan.original_question)
 
             # _execute_streaming_step 是生成器：先把步骤内部的 SQL 片段等
             # 子事件实时转发出去，最后一个 yield 才是该步骤的执行结果。
@@ -571,7 +571,7 @@ class StepExecutor:
                     result.rows,
                 )
                 result.storage_backend = self.storage_backend
-            elif self.failure_policy == "abort":
+            elif self.failure_policy == "abort" or result.error_type == "retrieval_not_ready":
                 abort_triggered = True
 
             results_by_step[step.step_id] = result
@@ -893,14 +893,17 @@ class StepExecutor:
         return self._run_with_chatbi(question, event_sink=event_sink)
 
     @staticmethod
-    def _compose_question(step_question: str, dependency_context: str) -> str:
-        if not dependency_context:
-            return step_question
-        return (
-            f"{step_question}\n\n"
-            f"前置步骤关键结果如下，请在本次查询中延续这些上下文：\n"
-            f"{dependency_context}"
-        )
+    def _compose_question(step_question: str, dependency_context: str, original_question: str = "") -> str:
+        # 保留子任务首行，兼容按首行识别任务的自定义执行器。
+        parts = [step_question]
+        if original_question:
+            parts.append(f"【整体分析问题】\n{original_question}")
+            parts.append("范围约束：当前子任务必须保留整体问题的时间、区域、订单状态与币种要求。"
+                         "子任务中的‘所有/全部’仅指该范围内的记录；除非明确要求对比期间，不得扩大范围。"
+                         "本步骤只查询当前子任务所需的指标，不要一次回答整体问题。")
+        if dependency_context:
+            parts.append(f"前置步骤已执行的 SQL 和关键结果如下，作为查询范围与结果的参考：\n{dependency_context}")
+        return "\n\n".join(parts)
 
     def _build_dependency_context(
         self,
@@ -917,6 +920,7 @@ class StepExecutor:
             payload = {
                 "step_id": result.step_id,
                 "step_name": result.step_name,
+                "sql": result.sql,
                 "columns": result.columns,
                 "rows": rows,
                 "result_reference": result.result_reference,
@@ -1163,7 +1167,7 @@ class PlanAndExecuteAgent:
         step_results = self.executor.execute_plan(plan, max_steps=max_steps, execution_budget=execution_budget)
         execution_budget.remaining()
         for result in step_results:
-            if result.error_type in {"database_budget_exceeded", "database_result_limit", "database_query_timeout"}:
+            if result.error_type in {"database_budget_exceeded", "database_result_limit", "database_query_timeout", "retrieval_not_ready"}:
                 return {"success": False, "error": result.error, "error_type": result.error_type}
         _print_progress("开始生成执行摘要。")
         summary = self.summarizer.summarize(user_question, plan, step_results)

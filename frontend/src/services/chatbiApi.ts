@@ -592,7 +592,7 @@ export async function fetchHealth(): Promise<HealthState> {
   const apiBase = getApiBaseUrl();
   try {
     const res = await fetch(`${apiBase}/health`, { signal: AbortSignal.timeout(4000) });
-    if (!res.ok) {
+    if (!res.ok && res.status !== 503) {
       return {
         status: 'error',
         databaseConnected: false,
@@ -601,8 +601,9 @@ export async function fetchHealth(): Promise<HealthState> {
     }
     const data = await res.json();
     return {
-      status: data.status === 'ok' ? 'ok' : 'error',
+      status: data.status === 'ok' ? 'ok' : data.status === 'degraded' ? 'degraded' : 'error',
       databaseConnected: !!data.database_connected,
+      message: data.message,
     };
   } catch (err: any) {
     return {

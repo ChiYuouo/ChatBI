@@ -174,3 +174,31 @@ def test_terminal_errors_are_never_retried(error_type):
     result = StepExecutor(step_runner=runner, max_retries=3).execute_plan(plan)[0]
     assert result.attempts == 1
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_each_analysis_step_keeps_original_scope_and_executed_dependency_sql(stream):
+    seen = []
+    original = "统计2026年7月欧洲已完成订单的数量和人民币收入"
+    sql = "SELECT order_id FROM sales_orders WHERE order_date >= '2026-07-01' AND order_date < '2026-08-01'"
+    def runner(question):
+        seen.append(question)
+        return {"success": True, "sql": sql, "columns": ["orders"], "rows": [{"orders": 2}]}
+    plan = ExecutionPlan(original_question=original, question_type="dimension", analysis_goal="count and revenue", steps=[
+        PlanStep(step_id="step_1", task_id="task_1", step_name="orders", question="查询订单", task_type="query",
+            description="orders", expected_output="orders"),
+        PlanStep(step_id="step_2", task_id="task_2", step_name="revenue", question="汇总所有订单人民币收入", task_type="query",
+            description="revenue", expected_output="revenue", depends_on=["step_1"]),
+    ])
+    executor = StepExecutor(step_runner=runner)
+    try:
+        if stream:
+            list(executor.execute_plan_streaming(plan))
+        else:
+            executor.execute_plan(plan)
+        assert len(seen) == 2
+        assert all(original in question for question in seen)
+        assert sql in seen[1]
+        assert "2026-08-01" in seen[1]
+    finally:
+        executor.cleanup()

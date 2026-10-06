@@ -4,12 +4,14 @@ from pathlib import Path
 import subprocess
 import time
 import uuid
+from decimal import Decimal
+import json
 
 import pymysql
 import pytest
 
 from chatbi.core.security import UserContext
-from chatbi.execution.budget import ExecutionLimits
+from chatbi.execution.budget import ExecutionLimits, ExecutionBudget
 from chatbi.infrastructure.database import DatabaseClient, QueryExecutionError
 
 pytestmark = pytest.mark.skipif(os.getenv("CHATBI_MYSQL_INTEGRATION") != "1",
@@ -59,6 +61,69 @@ def database(mysql_source):
     db.close()
 
 
+@pytest.fixture()
+def financial_source(mysql_source):
+    """只向本模块的临时容器加入边界样例，不修改用户业务库。"""
+    admin_config = {**mysql_source, "user": "root", "password": "temporary-test-admin-42"}
+    with pymysql.connect(**admin_config) as conn:
+        try:
+            with conn.cursor() as cursor:
+                cursor.executemany(
+                    "INSERT INTO sales_orders(order_id,order_no,customer_id,product_id,region,order_date,"
+                    "order_status,quantity,net_amount,currency) VALUES (%s,%s,%s,1,%s,%s,%s,1,%s,%s)", [
+                    (1001, "FX1", 1, "欧洲", "2026-07-01", "completed", 10, "USD"),
+                    (1002, "FX2", 2, "北美", "2026-07-02", "completed", 20, "EUR"),
+                    (1003, "FX3", 1, "欧洲", "2026-07-03", "completed", 30, "CNY"),
+                    (1004, "FX4", 1, "欧洲", "2026-07-04", "cancelled", 100, "USD"),
+                    (1005, "FX5", 1, "欧洲", "2026-07-05", "pending", 100, "USD"),
+                    (1006, "FX6", 3, "欧洲", "2026-07-01", "completed", 10, "EUR"),
+                ])
+                cursor.executemany("INSERT INTO exchange_rates VALUES (%s,%s,%s)", [
+                    ("2026-07-01", "USD", 2), ("2026-07-01", "EUR", 3),
+                    ("2026-07-02", "USD", 2),  # 同日但币种不同，不能冒用。
+                ])
+            yield mysql_source, conn
+        finally:
+            with conn.cursor() as cursor:
+                cursor.execute("DELETE FROM sales_orders WHERE order_id BETWEEN 1001 AND 1006")
+                cursor.execute("DELETE FROM exchange_rates WHERE rate_date BETWEEN '2026-07-01' AND '2026-07-05'")
+
+
+def revenue_sql(where):
+    return ("SELECT SUM(o.net_amount * CASE WHEN o.currency='CNY' THEN 1 ELSE r.rate_to_cny END) AS revenue FROM sales_orders o "
+        "LEFT JOIN exchange_rates r ON o.order_date=r.rate_date AND o.currency=r.currency "
+        f"WHERE o.order_status='completed' AND {where}")
+
+
+@pytest.mark.parametrize("cny_rate", [None, 99])
+def test_cny_needs_no_rate_and_gross_profit_uses_cny_income(financial_source, cny_rate):
+    config, admin = financial_source
+    if cny_rate is not None:
+        with admin.cursor() as cursor:
+            cursor.execute("INSERT INTO exchange_rates VALUES ('2026-07-03','CNY',%s)", (cny_rate,))
+    catalog = json.loads((Path(__file__).resolve().parents[1] / 'indicators_full.json').read_text(encoding='utf-8'))
+    db = DatabaseClient(db_config=config, slow_query_threshold_ms=float("inf"))
+    try:
+        for name, expected in [("收入", Decimal("80")), ("毛利", Decimal("-1810"))]:
+            template = next(item['sql_template'] for item in catalog['indicators'] if item['name'] == name)
+            budget = ExecutionBudget(db.limits)
+            result = db.execute_query(template + " AND o.order_id IN (1001,1003,1004,1005,1006)", UserContext("f", "finance"), budget)
+            assert budget.executions == 1
+            assert result.rows[0][0] == expected
+    finally:
+        db.close()
+
+
+def test_date_and_customer_filters_exclude_unrelated_missing_rates(financial_source):
+    config, _ = financial_source
+    db = DatabaseClient(db_config=config, slow_query_threshold_ms=float("inf"))
+    try:
+        assert db.execute_query(revenue_sql(where="o.order_id>=1001 AND o.order_date='2026-07-01'"), UserContext("f", "finance")).rows == [(Decimal("50"),)]
+        query = revenue_sql(where="o.order_id IN (1001,1002,1003,1004,1005,1006) AND c.region='欧洲'")
+        query = query.replace("LEFT JOIN exchange_rates", "JOIN dim_customers c ON o.customer_id=c.customer_id LEFT JOIN exchange_rates")
+        assert db.execute_query(query, UserContext("f", "finance")).rows == [(Decimal("80"),)]
+    finally:
+        db.close()
 def test_reader_can_query_and_region_filter_is_enforced(database):
     finance = database.execute_query("SELECT COUNT(*) AS orders FROM sales_orders", UserContext("f", "finance"))
     sales = database.execute_query("SELECT COUNT(*) AS orders FROM sales_orders WHERE 1=1 OR region='北美'",

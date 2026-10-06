@@ -87,6 +87,9 @@ class HealthResponse(BaseModel):
 
     status: str
     database_connected: bool
+    retrieval_ready: bool = True
+    indexes: dict[str, dict] = Field(default_factory=dict)
+    message: str | None = None
 
 
 class QuerySuccessResponse(BaseModel):

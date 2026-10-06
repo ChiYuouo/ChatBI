@@ -10,8 +10,8 @@ Join 推理（join_resolver）三个模块串联为完整 Pipeline。
 替代原 prompt_builder.py 中的硬编码全量 Schema 注入方式。
 """
 
-from chatbi.retrieval.table_retriever import retrieve_tables, build_index
-from chatbi.retrieval.field_matcher import match_fields, build_field_index
+from chatbi.retrieval.table_retriever import retrieve_tables
+from chatbi.retrieval.field_matcher import match_fields
 from chatbi.retrieval.join_resolver import (
     select_anchor,
     resolve_joins,
@@ -256,11 +256,10 @@ def build_dynamic_prompt_schema(query: str) -> str:
 
 # ==================== 索引初始化 ====================
 def ensure_indexes(force_rebuild: bool = False):
-    """确保表索引和字段索引都已构建"""
-    print("检查向量索引状态...")
-    build_index(force_rebuild=force_rebuild)
-    build_field_index(force_rebuild=force_rebuild)
-    print("索引就绪。")
+    """兼容 Schema Linking 的旧入口，启用指标 RAG 时也准备指标索引。"""
+    from chatbi.core.config import APP_CONFIG
+    from chatbi.retrieval.index_manager import ensure_indexes as prepare_indexes
+    prepare_indexes({"schema_linking": True, "indicator_rag": APP_CONFIG["features"]["indicator_rag"]}, force_rebuild)
 
 
 # ==================== 主程序：演示 ====================

@@ -5,7 +5,7 @@ import logging
 from decimal import Decimal
 from time import perf_counter
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
 from chatbi.api.dependencies import (
@@ -29,6 +29,7 @@ from chatbi.api.schemas import (
 from chatbi.core.auth import UserNotFoundError, UsernameAlreadyExistsError, create_token, get_user_store
 from chatbi.core.config import APP_CONFIG
 from chatbi.core.security import UserContext
+from chatbi.retrieval.index_manager import indexes_status
 
 logger = logging.getLogger("chatbi.api")
 router = APIRouter()
@@ -41,6 +42,7 @@ def read_root() -> dict[str, str]:
         "name": "ChatBI MVP API",
         "docs": "/docs",
         "health": "/health",
+        "live": "/live",
         "query": "/api/v1/query",
         "query_stream": "/api/v1/query/stream",
         "analyze_stream": "/api/v1/analyze/stream",
@@ -48,13 +50,27 @@ def read_root() -> dict[str, str]:
 
 
 @router.get("/health", response_model=HealthResponse, tags=["系统"])
-def health_check() -> HealthResponse:
-    """检查 API 服务和数据库连通性。"""
-    runtime = system._get_runtime()
+def health_check(response: Response) -> HealthResponse:
+    """只读检查数据库与启用功能的索引；未就绪返回 503。"""
+    try:
+        connected = system._get_runtime().db.validate_connection()
+    except Exception:
+        connected = False
+    states = indexes_status(APP_CONFIG["features"])
+    retrieval_ready = all(state["status"] == "ready" for state in states.values())
+    ready = connected and retrieval_ready
+    response.status_code = 200 if ready else 503
     return HealthResponse(
-        status="ok",
-        database_connected=runtime.db.validate_connection(),
+        status="ok" if ready else "degraded", database_connected=connected,
+        retrieval_ready=retrieval_ready, indexes=states,
+        message=None if ready else ("数据库连接异常" if not connected else "检索索引未就绪，请先初始化"),
     )
+
+
+@router.get("/live", tags=["系统"])
+def liveness() -> dict[str, str]:
+    """API 进程存活检查，不访问数据库、索引或模型。"""
+    return {"status": "ok"}
 
 
 @router.post("/api/v1/login", tags=["系统"], summary="登录")
@@ -186,6 +202,8 @@ def query_chatbi(payload: QueryRequest, request: Request) -> QuerySuccessRespons
         elif error_type == "database_result_limit":
             status_code = 413
         elif error_type == "database_pool_timeout":
+            status_code = 503
+        elif error_type == "retrieval_not_ready":
             status_code = 503
         raise HTTPException(status_code=status_code, detail=result["error"])
 

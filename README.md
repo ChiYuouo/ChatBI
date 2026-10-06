@@ -34,14 +34,27 @@ flowchart LR
 需要 Docker Compose，以及一个兼容 OpenAI API 的模型服务。复制 `.env.example` 为 `.env`，填写模型配置、`MYSQL_ROOT_PASSWORD`（初始化管理账户）、`DB_PASSWORD`（分析只读账户）和 `JWT_SECRET`，保留 `DB_USER=chatbi_reader`，然后启动：
 
 ```bash
-docker compose up --build
+docker compose up -d --build
 ```
 
 打开 [Web 工作台](http://localhost:8300)；[API 文档](http://localhost:8000/docs)和[健康检查](http://localhost:8000/health)也可直接访问。Compose 首次启动时会导入 `docker/mysql/init/` 中的示例业务数据。若 8300 端口被占用，可在 `.env` 中设置 `FRONTEND_PORT`。
 
 Windows 若报 `ports are not available` / `forbidden by its access permissions`，端口可能处于系统保留范围。可在 `.env` 设置 `BACKEND_PORT=18000`、`FRONTEND_PORT=18300`，再运行 `docker compose up -d`；访问地址相应改为 `http://localhost:18300` 和 `http://localhost:18000/docs`。这两项只改变宿主机映射，容器间通信仍使用内部端口。
 
-首次初始化还会运行 `02-reader.sh`，为分析账户仅授予五张演示表的 SELECT 权限；后端不再使用 root 配置。管理密码与分析密码分别配置，管理密码不会传给后端。
+首次初始化会运行 `02-reader.sh`，为分析账户仅授予五张演示表的 SELECT 权限；后端使用 reader，管理密码不会传给后端。
+
+启用 Schema Linking 或指标 RAG 时，`index-init` 会在后端启动前准备对应的表/字段/指标索引，首次会调用配置的 Embedding 服务。定义或 Embedding 模型/地址变化会触发重建；版本有效时跳过远程调用。索引保存到 `chatbi-index-data` 卷，镜像构建不需要本机 `chroma_db`。`index-init` 是一次性任务，成功后以退出码 0 结束是正常状态。检索全部关闭时不创建索引，也不调用 Embedding。
+
+初始化失败时查看 `docker compose logs index-init`，修正配置后重新启动。也可以单独准备或检查索引：
+
+```bash
+docker compose run --rm --no-deps index-init
+docker compose run --rm --no-deps index-init python -m chatbi.tools.init_indexes --status
+```
+
+`--all` 可准备全部三种索引；`--force` 强制重建并再次调用 Embedding。默认只处理当前启用功能需要的索引。不要通过删除 MySQL 数据卷来重建索引。
+
+`/health` 检查数据库以及启用检索功能的索引，未就绪返回 503；`/live` 只检查 API 进程。健康轮询不建索引、不调用模型。前端会区分数据库异常、检索未就绪和服务离线。
 
 已有 MySQL 数据卷不会重新执行初始化脚本。保留数据卷，将 `.env` 中的 `MYSQL_ROOT_PASSWORD` 设为该数据库原有的 root 密码，再配置 `DB_USER=chatbi_reader` 和新的分析密码，按顺序运行：
 
@@ -57,6 +70,7 @@ docker compose up -d --build backend frontend
 
 ```bash
 uv sync
+uv run python -m chatbi.tools.init_indexes
 uv run uvicorn api_service:app --reload
 ```
 
@@ -68,7 +82,7 @@ npm install
 npm run dev
 ```
 
-本地前端地址为 <http://localhost:3000>。前端 API 地址可在 `frontend/public/config.js` 中配置；Docker 部署使用同源反向代理。
+本地索引默认位于 `chroma_db`，可通过 `CHROMA_PERSIST_DIR` 指定其他目录；本地连接 Compose 的数据库使用 `DB_PORT=3307`。本地前端地址为 <http://localhost:3000>。前端 API 地址可在 `frontend/public/config.js` 中配置；Docker 部署使用同源反向代理。
 
 ### 账户授权
 
@@ -108,6 +122,8 @@ SQL 校验当前仅支持演示库的五张制造业表、明确的字段和常�
 
 超过行数或字节限制会明确失败，不返回截断数据作为成功结果。预算耗尽或结果超限会结束多步分析，不继续生成完整报告。连接池等待服从剩余预算，失效及未读完的连接会丢弃。SQL 会增加用于检测超限的 LIMIT，但不会扩大用户原本更小的 LIMIT。
 
+人民币换算和简化经营利润由提示词与 `indicators_full.json` 约定；按当前需求，后端没有固定表/字段的汇率完整性预检查，业务方需维护汇率数据。
+
 时间预算在阶段边界和受控网络调用中检查；本地同步计算及第三方库调用不能被 Python 立即强制中断，超时后的结果会被拒绝。结果字节统计不包含 SQL、格式化文本、报告和 SSE 外层封装。尚未完成租户/数据源授权、业务口径治理和持久取消协议。
 
 后端离线回归使用 `uv run pytest -q`，测试会固定功能开关并使用临时账户/会话存储，不调用真实模型或业务数据库。总体路线见 [企业改造规划](docs/enterprise-transformation-plan.md)，当前实施进度见 [第一阶段文档](docs/stages/phase-1-query-execution.md)。其他阶段文档从 [文档目录](docs/README.md) 进入。
@@ -119,9 +135,17 @@ $env:CHATBI_MYSQL_INTEGRATION = '1'
 uv run pytest -q tests/test_mysql_execution_integration.py
 ```
 
-## Text-to-SQL 评测
+独立 Compose 首次启动验收使用无本地索引、无本机账户/密钥的干净镜像，并创建自己的容器与数据卷；检索关闭且模型地址指向不可用地址，证明初始化不依赖远程模型。先构建测试镜像，再显式运行：
 
-2026-10-02 使用当前代码、50 道示例业务问题、已配置的模型服务与 MySQL 重新运行评测。评测将生成 SQL 和参考 SQL 分别执行，以结果是否等价作为主要指标：
+```powershell
+docker build -f docker/backend/Dockerfile -t chatbi-backend:phase1-clean .
+$env:CHATBI_COMPOSE_INTEGRATION = '1'
+uv run pytest -q tests/test_bootstrap_integration.py
+```
+
+## Text-to-SQL 历史评测
+
+2026-10-02 使用当时版本、50 道示例业务问题、已配置的模型服务与 MySQL 重新运行评测。评测将生成 SQL 和参考 SQL 分别执行，以结果是否等价作为主要指标：
 
 | 指标 | 结果 |
 | --- | ---: |
@@ -132,7 +156,7 @@ uv run pytest -q tests/test_mysql_execution_integration.py
 | SQL 执行失败 | 0 |
 | 执行成功但结果不匹配 | 8 |
 
-本次运行的[完整评测报告](reports/evaluation_report.md)包含逐题结果。评测命令为 `uv run python -m chatbi.tools.evaluator --report reports/evaluation_report.md`。这组数字反映当前示例数据与评测题集上的 SQL 生成表现，不代表任意业务数据库上的准确率。
+本次运行的[完整评测报告](reports/evaluation_report.md)包含逐题结果。评测命令为 `uv run python -m chatbi.tools.evaluator --report reports/evaluation_report.md`。这组历史数字反映当时示例数据与评测题集上的 SQL 生成表现，不作为本次第一阶段改动的准确率证明，不代表任意业务数据库上的准确率。
 
 
 ## 项目结构
@@ -149,7 +173,7 @@ src/chatbi/
 ├── retrieval/          Schema 和指标检索
 ├── services/           查询与分析业务流程
 ├── text2sql/           问题处理、Prompt 与结果格式化
-└── tools/              评测工具
+└── tools/              索引初始化、账户初始化和评测工具
 tests/                 后端自动化测试
 docker/                容器配置与示例数据初始化
 ```

@@ -31,6 +31,7 @@ from chatbi.bootstrap.runtime_factory import build_runtime
 from chatbi.core.config import APP_CONFIG, LLM_CONFIG
 from chatbi.core.security import QuerySecurityManager, SecurityError, UserContext
 from chatbi.infrastructure.database import QueryExecutionError
+from chatbi.retrieval.index_manager import IndexNotReady, require_indexes
 from chatbi.execution.budget import BudgetExceeded, ExecutionBudget, ExecutionLimits, bind_budget, budgeted_events
 from chatbi.execution.budgeted_llm import BudgetedLLM
 from chatbi.infrastructure.session_store import SessionStore
@@ -141,6 +142,8 @@ class ChatBISystem:
                 return self._run(*args, execution_budget=budget, **kwargs)
         except BudgetExceeded as exc:
             return {"success": False, "error": str(exc), "error_type": "database_budget_exceeded"}
+        except IndexNotReady as exc:
+            return {"success": False, "error": str(exc), "error_type": "retrieval_not_ready"}
 
     def run_stream_events(self, *args, execution_budget: ExecutionBudget | None = None, **kwargs):
         budget = execution_budget or self._new_budget()
@@ -149,6 +152,8 @@ class ChatBISystem:
             yield from budgeted_events(self._run_stream_events(*args, execution_budget=budget, **kwargs), budget)
         except BudgetExceeded as exc:
             yield "error", {"error": str(exc), "error_type": "database_budget_exceeded"}
+        except IndexNotReady as exc:
+            yield "error", {"error": str(exc), "error_type": "retrieval_not_ready"}
 
     def _resolve_feature_options(self, overrides: dict[str, bool | None]) -> dict[str, bool]:
         feature_defaults = self.app_config.get("features", {})
@@ -226,6 +231,7 @@ class ChatBISystem:
             }
         )
 
+        require_indexes({"schema_linking": options["use_schema_linking"], "indicator_rag": options["use_indicator_rag"]})
         parsed = runtime.parser.parse(user_question)
         if not runtime.parser.validate(parsed):
             return None

@@ -17,14 +17,13 @@ from pathlib import Path
 from langchain_openai import OpenAIEmbeddings
 from chatbi.execution.budget import request_timeout
 from langchain_chroma import Chroma
-from langchain_core.documents import Document
-from chatbi.core.config import LLM_CONFIG
+from chatbi.core.config import CHROMA_ROOT, LLM_CONFIG
 
 
 # ==================== 配置 ====================
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 INDICATORS_FILE = str(PROJECT_ROOT / "indicators_full.json")
-CHROMA_PERSIST_DIR = str(PROJECT_ROOT / "chroma_db" / "indicators")
+CHROMA_PERSIST_DIR = str(CHROMA_ROOT / "indicators")
 
 
 def _cosine_relevance_score_fn(distance: float) -> float:
@@ -70,61 +69,9 @@ def load_indicators() -> dict[str, dict]:
 
 # ==================== 索引构建 ====================
 def build_indicator_index(force_rebuild: bool = False) -> Chroma:
-    """
-    将指标定义向量化并写入 ChromaDB。
-
-    每个指标的检索文档 = 指标名 + 别名 + 业务定义 + 计算公式
-    这段组合文本被向量化，用于语义匹配。
-    """
-    vectorstore = get_vectorstore()
-    existing = vectorstore._collection.count()
-
-    # 如果旧索引使用 L2 距离，必须重建为 cosine
-    existing_space = (vectorstore._collection.metadata or {}).get("hnsw:space", "l2")
-    metric_changed = existing_space != "cosine"
-
-    if existing > 0 and not force_rebuild and not metric_changed:
-        print(f"指标索引已存在（{existing} 条），跳过重建。")
-        return vectorstore
-
-    if existing > 0 and (force_rebuild or metric_changed):
-        # 新版 Chroma 不再接受 where={}，按 ID 删除全部
-        all_ids = vectorstore._collection.get(include=["metadatas"])["ids"]
-        if all_ids:
-            vectorstore._collection.delete(ids=all_ids)
-        print("已清空旧指标索引数据" + ("（距离度量已切换为 cosine）" if metric_changed else ""))
-
-    indicators = load_indicators()
-    documents = []
-    ids = []
-
-    for name, ind in indicators.items():
-        # 构建检索文档：组合指标名、别名、定义、公式
-        aliases_str = "、".join(ind.get("aliases", []))
-        search_text = (
-            f"指标：{name}（{aliases_str}）\n"
-            f"定义：{ind['definition']}\n"
-            f"计算公式：{ind['formula']}"
-        )
-
-        doc = Document(
-            page_content=search_text,
-            metadata={
-                "name": name,
-                "level": ind.get("level", ""),
-                "aliases": aliases_str,
-                "formula": ind["formula"],
-                "data_source": ind.get("data_source", ""),
-                "depends_on": ",".join(ind.get("depends_on", [])),
-            },
-        )
-        documents.append(doc)
-        ids.append(name)
-
-    vectorstore.add_documents(documents, ids=ids)
-    print(f"指标索引构建完成：{len(documents)} 个指标已写入 ChromaDB")
-    print(f"持久化路径：{CHROMA_PERSIST_DIR}")
-    return vectorstore
+    """通过统一入口识别版本并按需构建索引。"""
+    from chatbi.retrieval.index_manager import ensure_index
+    return ensure_index("indicators", force_rebuild)
 
 
 # ==================== RAG 检索 ====================

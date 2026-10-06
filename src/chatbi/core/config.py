@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -103,3 +104,5 @@ def get_database_source_config(
 DB_CONFIG = get_database_source_config()
 DB_RUNTIME_CONFIG = APP_CONFIG["database"]["runtime"]
 LLM_CONFIG = APP_CONFIG["llm"]
+# 所有索引共享根目录；Compose 将此目录挂载到持久卷。
+CHROMA_ROOT = Path(os.getenv("CHROMA_PERSIST_DIR", str(Path(__file__).resolve().parents[3] / "chroma_db"))).resolve()

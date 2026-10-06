@@ -40,7 +40,7 @@ export interface StreamEventData {
 }
 
 export interface HealthState {
-  status: 'ok' | 'error' | 'checking';
+  status: 'ok' | 'degraded' | 'error' | 'checking';
   databaseConnected: boolean;
   message?: string;
 }

@@ -10,12 +10,10 @@
 依赖安装：langchain-openai, langchain-chroma, chromadb
 """
 
-from pathlib import Path
 from langchain_openai import OpenAIEmbeddings
 from chatbi.execution.budget import request_timeout
 from langchain_chroma import Chroma
-from langchain_core.documents import Document
-from chatbi.core.config import LLM_CONFIG
+from chatbi.core.config import CHROMA_ROOT, LLM_CONFIG
 from chatbi.retrieval.table_retriever import retrieve_tables
 
 
@@ -153,7 +151,7 @@ FIELD_METADATA = {
         "description": (
             "材料成本，DECIMAL(10,2)。"
             "产品的原材料采购成本（正极材料、电解液、隔膜等）。"
-            "毛利计算公式中的核心组成部分：毛利 = net_amount - (material_cost + labor_cost) * quantity。"
+            "产品当前人民币成本用于估算销售成本；毛利 = 换算后的人民币收入 - (material_cost + labor_cost) * quantity。"
         ),
         "domain": "维度表",
     },
@@ -163,7 +161,7 @@ FIELD_METADATA = {
         "description": (
             "人工成本，DECIMAL(10,2)。"
             "产品的人工制造成本。"
-            "毛利计算公式中的核心组成部分：毛利 = net_amount - (material_cost + labor_cost) * quantity。"
+            "产品当前人民币成本用于估算销售成本；毛利 = 换算后的人民币收入 - (material_cost + labor_cost) * quantity。"
         ),
         "domain": "维度表",
     },
@@ -275,7 +273,8 @@ FIELD_METADATA = {
         "description": (
             "不含税收入（财务口径的销售额），DECIMAL(12,2)。"
             "这是业务中'收入''销售额''营业收入'的标准字段。"
-            "毛利计算：毛利 = net_amount - (material_cost + labor_cost) * quantity。"
+            "原币收入须先折算人民币；人民币直接计入，外币按订单日期和币种的有效汇率换算，不得将缺失外币汇率默认补成 0 或 1。"
+            "毛利 = 人民币收入 - (material_cost + labor_cost) * quantity（产品当前人民币成本估算）。"
             "统计收入时必须同时过滤 order_status = 'completed'。"
         ),
         "domain": "事实表",
@@ -484,7 +483,7 @@ BUSINESS_RULES = [
 
 
 # ==================== ChromaDB 配置 ====================
-CHROMA_PERSIST_DIR = str(Path(__file__).resolve().parents[3] / "chroma_db" / "fields")
+CHROMA_PERSIST_DIR = str(CHROMA_ROOT / "fields")
 
 
 def _cosine_relevance_score_fn(distance: float) -> float:
@@ -522,49 +521,9 @@ def get_vectorstore() -> Chroma:
 
 # ==================== 索引构建 ====================
 def build_field_index(force_rebuild: bool = False) -> Chroma:
-    """
-    将所有字段描述向量化并写入 ChromaDB。
-
-    Args:
-        force_rebuild: 是否强制重建索引
-
-    Returns:
-        Chroma 向量存储实例
-    """
-    vectorstore = get_vectorstore()
-    existing = vectorstore._collection.count()
-
-    if existing > 0 and not force_rebuild:
-        print(f"字段索引已存在（{existing} 条），跳过重建。如需重建请传入 force_rebuild=True")
-        return vectorstore
-
-    if force_rebuild and existing > 0:
-        existing_ids = vectorstore._collection.get()["ids"]
-        if existing_ids:
-            vectorstore._collection.delete(ids=existing_ids)
-        print("已清空旧字段索引数据")
-
-    # 构建 Document 列表
-    documents = []
-    ids = []
-    for field_key, meta in FIELD_METADATA.items():
-        doc = Document(
-            page_content=meta["description"],
-            metadata={
-                "table_name": meta["table"],
-                "field_name": meta["field"],
-                "field_key": field_key, # 如 "sales_orders.net_amount"
-                "domain": meta["domain"],
-            },
-        )
-        documents.append(doc)
-        ids.append(field_key)
-
-    # 写入向量数据库
-    vectorstore.add_documents(documents, ids=ids)
-    print(f"字段索引构建完成：{len(documents)} 个字段已写入 ChromaDB")
-    print(f"持久化路径：{CHROMA_PERSIST_DIR}")
-    return vectorstore
+    """通过统一入口识别版本并按需构建索引。"""
+    from chatbi.retrieval.index_manager import ensure_index
+    return ensure_index("fields", force_rebuild)
 
 
 # ==================== 业务规则评估 ====================
@@ -683,7 +642,8 @@ def match_fields(
             "score": round(final_score, 4),
             "embedding_score": round(embedding_score, 4),
             "rule_applied": rule_applied,
-            "description": doc.page_content,
+            # 向量只负责召回；业务含义使用当前受管定义，避免旧索引文案覆盖修正。
+            "description": FIELD_METADATA.get(field_key, {}).get("description", doc.page_content),
         })
 
     # 5. 补充强制包含但未被向量检索命中的字段

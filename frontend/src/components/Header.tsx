@@ -35,10 +35,12 @@ export const Header: React.FC<HeaderProps> = ({
         </Tooltip>
       );
     }
-    if (health.status === 'ok' && !health.databaseConnected) {
+    if (health.status === 'degraded') {
       return (
-        <Tooltip title="API 正常但数据库连接异常">
-          <button className="health-indicator warning" onClick={onRefreshHealth}>数据库异常</button>
+        <Tooltip title={health.message || '服务尚未准备好'}>
+          <button className="health-indicator warning" onClick={onRefreshHealth}>
+            {health.databaseConnected ? '检索未就绪' : '数据库异常'}
+          </button>
         </Tooltip>
       );
     }
