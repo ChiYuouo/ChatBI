@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
+import { format } from 'sql-formatter';
 import { Button, Tooltip, Tag, message } from 'antd';
 import {
   CopyOutlined,
@@ -90,6 +91,19 @@ export const SqlViewer: React.FC<SqlViewerProps> = ({
   durationMs,
 }) => {
   const [copied, setCopied] = useState(false);
+  const displaySql = useMemo(() => {
+    if (!sql || isStreaming) return sql;
+    try {
+      return format(sql, {
+        language: 'mysql',
+        keywordCase: 'upper',
+        tabWidth: 2,
+        expressionWidth: 50,
+      });
+    } catch {
+      return sql;
+    }
+  }, [sql, isStreaming]);
 
   const handleCopy = async () => {
     if (!sql) return;
@@ -145,7 +159,7 @@ export const SqlViewer: React.FC<SqlViewerProps> = ({
       <div className="sql-code-container">
         <pre className="sql-code-content">
           <code>
-            {renderHighlightedSql(sql || '')}
+            {renderHighlightedSql(displaySql || '')}
             {isStreaming && <span className="sql-streaming-cursor" />}
           </code>
         </pre>

@@ -175,8 +175,10 @@ body {
   font-size: 13.5px;
   line-height: 1.65;
   color: #cdd6f4;
-  white-space: pre-wrap;
-  word-break: break-all;
+  white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
+  tab-size: 2;
 }
 
 /* SQL 关键字高亮样式 */

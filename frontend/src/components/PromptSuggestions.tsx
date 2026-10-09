@@ -30,7 +30,7 @@ const QUERY_PROMPTS: Suggestion[] = [
   {
     key: 'q1',
     icon: <DollarOutlined style={{ color: '#52c41a' }} />,
-    text: '上个月销售额是多少？',
+    text: '2026年9月销售额是多少？',
   },
   {
     key: 'q2',
@@ -53,12 +53,12 @@ const ANALYZE_PROMPTS: Suggestion[] = [
   {
     key: 'a1',
     icon: <FallOutlined style={{ color: '#f5222d' }} />,
-    text: '最近三个月利润为什么下降？',
+    text: '2026年7月至9月，简化经营利润为什么下降？',
   },
   {
     key: 'a2',
     icon: <AlertOutlined style={{ color: '#fa8c16' }} />,
-    text: '哪些产品线的成本上升最快，主要原因是什么？',
+    text: '2026年7月至9月各产品线的销售成本如何变化，主要由销量还是产品结构驱动？',
   },
   {
     key: 'a3',

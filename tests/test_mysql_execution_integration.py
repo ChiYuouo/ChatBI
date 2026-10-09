@@ -128,8 +128,8 @@ def test_reader_can_query_and_region_filter_is_enforced(database):
     finance = database.execute_query("SELECT COUNT(*) AS orders FROM sales_orders", UserContext("f", "finance"))
     sales = database.execute_query("SELECT COUNT(*) AS orders FROM sales_orders WHERE 1=1 OR region='北美'",
         UserContext("s", "sales", "欧洲"))
-    assert finance.rows == [(5,)]
-    assert sales.rows == [(3,)]
+    assert finance.rows == [(229,)]
+    assert sales.rows == [(69,)]
 
 
 @pytest.mark.parametrize("sql", [
@@ -172,7 +172,7 @@ def test_result_limit_drops_unread_mysql_stream_and_pool_recovers(mysql_source):
             db.execute_query("SELECT order_id FROM sales_orders", UserContext("f", "finance"))
         assert error.value.error_type == "result_limit"
         assert db.connection_pool.stats["total"] == 0
-        assert db.execute_query("SELECT COUNT(*) AS orders FROM sales_orders", UserContext("f", "finance")).rows == [(5,)]
+        assert db.execute_query("SELECT COUNT(*) AS orders FROM sales_orders", UserContext("f", "finance")).rows == [(229,)]
     finally:
         db.close()
 

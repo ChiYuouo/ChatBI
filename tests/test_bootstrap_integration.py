@@ -59,7 +59,7 @@ def test_first_boot_with_fresh_volumes_and_no_indexes(tmp_path):
             "from chatbi.core.security import UserContext; "
             "assert not list(Path('/app/chroma_db').rglob('*.sqlite3')); "
             "db=DatabaseClient(db_config=DB_CONFIG); "
-            "assert db.execute_query('SELECT COUNT(*) FROM sales_orders', UserContext.demo_admin()).rows == [(5,)]; db.close()"],
+            "assert db.execute_query('SELECT COUNT(*) FROM sales_orders', UserContext.demo_admin()).rows == [(229,)]; db.close()"],
             check=True, capture_output=True, text=True, timeout=10)
         # 重启保持新卷内的数据与 reader 授权，不再触发种子覆盖。
         subprocess.run(command + ["restart", "backend"], check=True, capture_output=True, timeout=15)
