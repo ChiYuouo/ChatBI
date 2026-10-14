@@ -94,6 +94,8 @@ class LLMClient:
             for chunk in stream:
                 if budget is not None:
                     budget.remaining()
+                if not chunk.choices:
+                    continue  
                 delta_content = chunk.choices[0].delta.content
                 if delta_content is not None:
                     yield delta_content
