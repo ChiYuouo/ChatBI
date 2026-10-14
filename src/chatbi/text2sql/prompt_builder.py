@@ -286,10 +286,14 @@ def build_prompt(
 6. 统计销售额时，LEFT JOIN 汇率表；人民币直接计入，外币按订单日期和币种的有效汇率转换为人民币，不得将缺失外币汇率默认补成 0 或 1
    使用 CASE WHEN o.currency = 'CNY' THEN 1 ELSE r.rate_to_cny END
 7. SQL 必须完整闭合，CTE、SELECT、GROUP BY、ORDER BY 不得省略，不要输出截断的半句 SQL
+8. 执行层只支持普通聚合、INNER/LEFT JOIN、非相关子查询、非递归 CTE 和 UNION；
+   不要生成窗口函数、相关子查询或 RIGHT/FULL/CROSS JOIN。多表查询的字段应写明表别名；
+   优先使用 COUNT、SUM、AVG、MIN、MAX、ROUND、COALESCE、IFNULL、NULLIF、
+   DATE_FORMAT、DATE_SUB、CURDATE 等已支持的函数；自定义顺序可用 FIELD(列, 常量...)
 """
 
     if use_rules or use_guards:
-        prompt += """8. 优先遵循【关键业务规则】和【常见错误防护】中的约束"""
+        prompt += """9. 优先遵循【关键业务规则】和【常见错误防护】中的约束"""
 
     prompt += """
 请直接输出 SQL：

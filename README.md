@@ -39,8 +39,6 @@ docker compose up -d --build
 
 打开 [Web 工作台](http://localhost:8300)；[API 文档](http://localhost:8000/docs)和[健康检查](http://localhost:8000/health)也可直接访问。Compose 首次启动时会导入 `docker/mysql/init/` 中的示例业务数据。若 8300 端口被占用，可在 `.env` 中设置 `FRONTEND_PORT`。
 
-Windows 若报 `ports are not available` / `forbidden by its access permissions`，端口可能处于系统保留范围。可在 `.env` 设置 `BACKEND_PORT=18000`、`FRONTEND_PORT=18300`，再运行 `docker compose up -d`；访问地址相应改为 `http://localhost:18300` 和 `http://localhost:18000/docs`。这两项只改变宿主机映射，容器间通信仍使用内部端口。
-
 演示数据是**虚构样本**：保留原有 5 位客户、5 款产品、5 笔订单，同时追加 16 位客户、8 款产品、224 笔订单、170 条逐日汇率和 27 条费用记录。订单覆盖 2026 年 1—10 月（10 月仅截至 8 日），包含五个大区、三种币种和三种订单状态；费用、汇率与订单时间可对齐。数据用于演示趋势和归因，不代表真实企业业绩。固定样本不会自动随日期向后延伸，超过 2026 年 10 月后请优先使用明确的 2026 年时间范围提问。
 
 已有 MySQL 数据卷不会重新执行初始化 SQL；如果此前已启动过项目，可在项目根目录运行以下命令，把同一套虚构样本**追加**到当前本地演示库：
@@ -145,7 +143,7 @@ SQL 校验当前仅支持演示库的五张制造业表、明确的字段和常�
 
 时间预算在阶段边界和受控网络调用中检查；本地同步计算及第三方库调用不能被 Python 立即强制中断，超时后的结果会被拒绝。结果字节统计不包含 SQL、格式化文本、报告和 SSE 外层封装。尚未完成租户/数据源授权、业务口径治理和持久取消协议。
 
-后端离线回归使用 `uv run pytest -q`，测试会固定功能开关并使用临时账户/会话存储，不调用真实模型或业务数据库。总体路线见 [企业改造规划](docs/enterprise-transformation-plan.md)，当前实施进度见 [第一阶段文档](docs/stages/phase-1-query-execution.md)。其他阶段文档从 [文档目录](docs/README.md) 进入。
+后端离线回归使用 `uv run pytest -q`，测试会固定功能开关并使用临时账户/会话存储，不调用真实模型或业务数据库。
 
 真实 MySQL 集成测试默认跳过。显式开启后，测试会自行创建、初始化并删除独立的 MySQL 8.4 容器，不读取 `.env` 的数据库凭据，也不连接现有业务库：
 

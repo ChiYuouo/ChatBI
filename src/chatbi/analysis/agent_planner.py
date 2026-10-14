@@ -330,7 +330,7 @@ class StepExecutor:
 
     # 只有「SQL 本身写错」才值得带错误上下文重写。
     # 权限 / 超时 / 连接 / 安全策略类失败重试没有意义。
-    _REPAIRABLE_ERROR_TYPES = frozenset({"sql_syntax", "execution_error"})
+    _REPAIRABLE_ERROR_TYPES = frozenset({"sql_syntax", "execution_error", "sql_generation"})
     _TRANSIENT_ERROR_TYPES = frozenset({"connection_error"})
 
     def __init__(
@@ -874,7 +874,10 @@ class StepExecutor:
             "   说明该语法 MySQL 不支持，必须替换为 MySQL 等价写法，\n"
             "   不要只做微小调整。\n"
             "4. 不要因为报错就删掉必要的指标或维度，也不要改成与问题无关的查询。\n"
-            "5. 只返回修正后的 SQL。"
+            "5. 当前执行层不支持窗口函数；需要比较相邻月份时，请改用按月聚合的 CTE 和普通 JOIN。\n"
+            "   多表查询中同名字段要加表别名，且字段必须存在于对应表。\n"
+            "   不支持 RIGHT/FULL JOIN；需要保留两侧记录时用两个 LEFT JOIN 查询及 UNION 合并。\n"
+            "6. 只返回修正后的 SQL。"
         )
 
     def _invoke_step_runner(

@@ -135,6 +135,40 @@ def test_repair_is_checked_again_and_permission_failure_ends_retries(stream):
     assert "GROUP BY error" in system.llm.prompts[1]
 
 
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("invalid_sql, expected_error", [
+    ("SELECT ROW_NUMBER() OVER (ORDER BY order_id) FROM sales_orders", "窗口函数"),
+    ("SELECT channel FROM sales_orders", "字段 channel 无法确定"),
+    ("SELECT order_id FROM sales_orders WHERE (", "SQL 语法不完整"),
+    ("SELECT o.order_id FROM sales_orders o FULL OUTER JOIN dim_customers c "
+     "ON o.customer_id = c.customer_id", "RIGHT/FULL JOIN"),
+])
+def test_generated_sql_is_rewritten_and_rechecked(stream, invalid_sql, expected_error):
+    sqls = []
+    db = DatabaseClient(connection_factory=lambda: Connection(Cursor(sqls)))
+    valid_sql = "SELECT COUNT(*) AS orders FROM sales_orders"
+    system = build_system(db, [invalid_sql, valid_sql])
+    plan = ExecutionPlan(original_question="orders", question_type="trend", analysis_goal="orders", steps=[
+        PlanStep(step_id="step_1", task_id="task_1", step_name="orders", question="orders", task_type="trend",
+                 description="orders", expected_output="count")])
+    executor = StepExecutor(chatbi_system=system, chatbi_run_options=OPTIONS,
+                            security_context=UserContext("admin", "admin"), max_retries=1)
+    if stream:
+        events = list(executor.execute_plan_streaming(plan))
+        result = next(data for kind, data in events if kind == "step_done")
+        retries = [data for kind, data in events if kind == "step_retry"]
+        assert len(retries) == 1 and retries[0]["mode"] == "rewrite"
+        assert expected_error in retries[0]["previous_error"]
+    else:
+        result = executor.execute_plan(plan)[0].model_dump()
+    assert result["success"] is True
+    assert result["attempts"] == 2
+    assert result["repaired"] is True
+    assert len(sqls) == 1
+    assert expected_error in system.llm.prompts[1]
+    assert "窗口函数" in system.llm.prompts[1]
+
+
 def test_concurrent_results_keep_their_own_sql_rows_and_statistics():
     sqls = []
     barrier = Barrier(2)

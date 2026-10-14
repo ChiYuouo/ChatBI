@@ -151,6 +151,40 @@ def test_finance_readonly_queries_and_literal_keywords_are_allowed():
         assert sqlglot.parse_one(secured, read="mysql") is not None
 
 
+def test_field_sort_is_allowed_without_exposing_denied_sales_columns():
+    manager = QuerySecurityManager()
+    sql = "SELECT order_status, COUNT(*) AS n FROM sales_orders GROUP BY order_status " \
+          "ORDER BY FIELD(order_status, 'completed', 'pending', 'cancelled')"
+    assert "FIELD(" in manager.secure_sql(sql, ADMIN)
+    assert "FIELD(" in manager.secure_sql(sql, SALES)
+    with pytest.raises(SecurityError, match="无权访问字段"):
+        manager.secure_sql("SELECT order_id FROM sales_orders ORDER BY FIELD(net_amount, 1, 2)", SALES)
+
+
+def test_readonly_statistical_functions_are_allowed():
+    manager = QuerySecurityManager()
+    sql = "SELECT STDDEV_SAMP(rd_expense) AS deviation, SQRT(POWER(4, 2)) AS score FROM finance_expenses"
+    secured = manager.secure_sql(sql, ADMIN)
+    assert "STDDEV_SAMP" in secured
+    assert "SQRT" in secured
+    with pytest.raises(SecurityError, match="无权访问表"):
+        manager.secure_sql(sql, SALES)
+    assert "STR_TO_DATE" in manager.secure_sql(
+        "SELECT STR_TO_DATE('2026-07', '%Y-%m') AS month_start", ADMIN
+    )
+
+
+def test_generated_sql_errors_explain_column_and_syntax_failures():
+    manager = QuerySecurityManager()
+    with pytest.raises(SecurityError, match="字段 channel 无法确定"):
+        manager.secure_sql("SELECT channel FROM sales_orders", ADMIN)
+    with pytest.raises(SecurityError, match="字段 customer_id 无法确定"):
+        manager.secure_sql("SELECT customer_id FROM sales_orders o JOIN dim_customers c "
+                           "ON o.customer_id = c.customer_id", ADMIN)
+    with pytest.raises(SecurityError, match="SQL 语法不完整"):
+        manager.secure_sql("SELECT order_id FROM sales_orders WHERE (", ADMIN)
+
+
 def test_result_mask_is_only_additional_protection():
     columns, rows = QuerySecurityManager().mask_result(["customer_name", "net_amount"], [("customer", 100)], SALES)
     assert columns == ["customer_name", "net_amount"]

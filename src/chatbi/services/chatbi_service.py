@@ -29,7 +29,7 @@ from typing import Any, Generator
 
 from chatbi.bootstrap.runtime_factory import build_runtime
 from chatbi.core.config import APP_CONFIG, LLM_CONFIG
-from chatbi.core.security import QuerySecurityManager, SecurityError, UserContext
+from chatbi.core.security import QuerySecurityManager, SQLGenerationError, SecurityError, UserContext
 from chatbi.infrastructure.database import QueryExecutionError
 from chatbi.retrieval.index_manager import IndexNotReady, require_indexes
 from chatbi.execution.budget import BudgetExceeded, ExecutionBudget, ExecutionLimits, bind_budget, budgeted_events
@@ -432,7 +432,7 @@ class ChatBISystem:
                 "success": False,
                 "sql": sql,
                 "error": str(e),
-                "error_type": "security",
+                "error_type": "sql_generation" if isinstance(e, SQLGenerationError) else "security",
                 "metadata": {
                     "detected_indicators": detected_indicators,
                     "model": LLM_CONFIG["model"],
@@ -691,7 +691,7 @@ class ChatBISystem:
         except SecurityError as e:
             yield "error", {
                 "error": str(e),
-                "error_type": "security",
+                "error_type": "sql_generation" if isinstance(e, SQLGenerationError) else "security",
                 "sql": sql,
                 "metadata": {
                     "detected_indicators": detected_indicators,

@@ -8,6 +8,10 @@ class SecurityError(Exception):
     """身份、权限或 SQL 安全检查失败，不得交给模型重试绕过。"""
 
 
+class SQLGenerationError(SecurityError):
+    """模型生成了不完整或暂不支持的查询，可在重新校验后改写。"""
+
+
 @dataclass(slots=True)
 class UserContext:
     """当前请求身份，只能由可信调用方提供。"""

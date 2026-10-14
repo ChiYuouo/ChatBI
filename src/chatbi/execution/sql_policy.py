@@ -6,11 +6,11 @@ from typing import TYPE_CHECKING
 
 import sqlglot
 from sqlglot import exp
-from sqlglot.errors import SqlglotError
+from sqlglot.errors import OptimizeError, ParseError, SqlglotError
 from sqlglot.optimizer.qualify import qualify
 from sqlglot.optimizer.scope import traverse_scope
 
-from chatbi.core.security import SecurityError
+from chatbi.core.security import SQLGenerationError, SecurityError
 
 if TYPE_CHECKING:
     from chatbi.core.security import SecurityPolicy, UserContext
@@ -39,10 +39,11 @@ class SQLPolicy:
         Add Sub Mul Div IntDiv Mod Neg Interval Tuple DataType DataTypeParam
     """.split())
     _FUNCTIONS = frozenset("""
-        COUNT SUM AVG MIN MAX ROUND ABS CEIL FLOOR COALESCE IF IFNULL NULLIF CASE
+        COUNT SUM AVG MIN MAX STDDEV_SAMP STDDEV_POP VARIANCE
+        ROUND ABS CEIL FLOOR SQRT POWER COALESCE IF IFNULL NULLIF CASE
         CAST EXTRACT YEAR MONTH DAY DAY_OF_MONTH DATE CURRENT_DATE CURRENT_TIMESTAMP
-        DATE_ADD DATE_SUB DATE_DIFF LAST_DAY TIME_TO_STR STR_TO_TIME TS_OR_DS_TO_DATE
-        CONCAT CONCAT_WS LOWER UPPER LENGTH CHAR_LENGTH SUBSTRING TRIM
+        DATE_ADD DATE_SUB DATE_DIFF LAST_DAY TIME_TO_STR STR_TO_TIME STR_TO_DATE TS_OR_DS_TO_DATE
+        CONCAT CONCAT_WS LOWER UPPER LENGTH CHAR_LENGTH SUBSTRING TRIM FIELD
     """.split())
 
     def secure(self, sql: str, user: UserContext, policy: SecurityPolicy) -> str:
@@ -84,6 +85,15 @@ class SQLPolicy:
             for node in tree.walk():
                 node.pop_comments()
             return tree.sql(dialect="mysql", identify=True, unsupported_level=sqlglot.ErrorLevel.RAISE)
+        except OptimizeError as exc:
+            match = re.search(r"Column '([^']+)' could not be resolved", str(exc))
+            if match:
+                raise SQLGenerationError(
+                    f"字段 {match.group(1)[:80]} 无法确定：请检查字段名；多表查询时给同名字段加表别名。"
+                ) from exc
+            raise SQLGenerationError("SQL 的字段或表别名无法解析，请检查 SELECT、JOIN 和子查询输出列。") from exc
+        except ParseError as exc:
+            raise SQLGenerationError("生成的 SQL 语法不完整或不符合 MySQL 查询格式。") from exc
         except SqlglotError as exc:
             raise SecurityError("SQL 不在已支持的安全范围内，或表/字段无法确定。") from exc
 
@@ -95,6 +105,8 @@ class SQLPolicy:
             ):
                 # 日期单位是解析器的 Var 节点，用户/系统变量的 Parameter 仍拒绝。
                 pass
+            elif isinstance(node, exp.Window):
+                raise SQLGenerationError("暂不支持窗口函数，请改用普通聚合、CTE 或子查询。")
             elif type(node).__name__ in self._NODES:
                 pass
             elif isinstance(node, exp.Func):
@@ -111,6 +123,8 @@ class SQLPolicy:
                 raise SecurityError("CTE 不能遮蔽已授权的业务表。")
             if isinstance(node, exp.Join):
                 if node.side.upper() not in {"", "LEFT"} or node.kind.upper() not in {"", "INNER", "OUTER"}:
+                    if node.side.upper() in {"RIGHT", "FULL"}:
+                        raise SQLGenerationError("暂仅支持 INNER JOIN 与 LEFT JOIN；请将 RIGHT/FULL JOIN 改写为 LEFT JOIN 或 UNION。")
                     raise SecurityError("暂仅支持 INNER JOIN 与 LEFT JOIN。")
                 if not node.args.get("on") or node.args.get("using"):
                     raise SecurityError("JOIN 必须使用明确的 ON 条件。")

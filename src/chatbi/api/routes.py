@@ -220,7 +220,7 @@ def query_chatbi(payload: QueryRequest, request: Request) -> QuerySuccessRespons
             status_code = 502
         elif error_type in {"security", "database_permission_denied"}:
             status_code = 403
-        elif error_type == "database_sql_syntax":
+        elif error_type in {"database_sql_syntax", "sql_generation"}:
             status_code = 422
         elif error_type == "database_connection_error":
             status_code = 503
