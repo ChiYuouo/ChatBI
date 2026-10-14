@@ -795,7 +795,7 @@ export default function App() {
         token: {
           colorPrimary: '#0f766e',
           borderRadius: 10,
-          fontFamily: `-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif`,
+          fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif',
         },
       }}
     >

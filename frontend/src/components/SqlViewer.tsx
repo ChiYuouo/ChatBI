@@ -127,7 +127,7 @@ export const SqlViewer: React.FC<SqlViewerProps> = ({
     <div className="sql-viewer-card">
       <div className="sql-viewer-header">
         <div className="sql-header-title">
-          <CodeOutlined style={{ color: '#89b4fa', marginRight: 6 }} />
+          <CodeOutlined style={{ color: '#93d2b9', marginRight: 6 }} />
           <span>生成的 SQL 查询语句</span>
         </div>
 

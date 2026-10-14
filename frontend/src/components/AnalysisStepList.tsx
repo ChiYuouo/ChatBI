@@ -24,7 +24,7 @@ const STATUS_META: Record<
   { color: string; label: string }
 > = {
   pending: { color: '#bfbfbf', label: '等待中' },
-  running: { color: '#1677ff', label: '执行中' },
+  running: { color: 'var(--accent)', label: '执行中' },
   completed: { color: '#52c41a', label: '已完成' },
   failed: { color: '#ff4d4f', label: '已失败' },
   skipped: { color: '#8c8c8c', label: '已跳过' },

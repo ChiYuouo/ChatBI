@@ -67,7 +67,7 @@ export const QueryStatusChain: React.FC<QueryStatusChainProps> = ({
           : 'SQL 生成完成',
       icon:
         getStepStatus(1) === 'loading' ? (
-          <LoadingOutlined style={{ color: '#1677ff' }} />
+          <LoadingOutlined style={{ color: 'var(--accent)' }} />
         ) : getStepStatus(1) === 'success' ? (
           <CheckCircleFilled style={{ color: '#52c41a' }} />
         ) : getStepStatus(1) === 'error' ? (
@@ -90,7 +90,7 @@ export const QueryStatusChain: React.FC<QueryStatusChainProps> = ({
           : '等待 SQL 生成后执行',
       icon:
         getStepStatus(2) === 'loading' ? (
-          <LoadingOutlined style={{ color: '#1677ff' }} />
+          <LoadingOutlined style={{ color: 'var(--accent)' }} />
         ) : getStepStatus(2) === 'success' ? (
           <CheckCircleFilled style={{ color: '#52c41a' }} />
         ) : getStepStatus(2) === 'error' ? (

@@ -39,12 +39,12 @@ const QUERY_PROMPTS: Suggestion[] = [
   },
   {
     key: 'q3',
-    icon: <LineChartOutlined style={{ color: '#1677ff' }} />,
+    icon: <LineChartOutlined style={{ color: 'var(--accent)' }} />,
     text: '统计各客户类型的订单量和平均客单价',
   },
   {
     key: 'q4',
-    icon: <UsergroupAddOutlined style={{ color: '#722ed1' }} />,
+    icon: <UsergroupAddOutlined style={{ color: 'var(--accent)' }} />,
     text: '查询销售额排名前三的产品线',
   },
 ];
@@ -67,7 +67,7 @@ const ANALYZE_PROMPTS: Suggestion[] = [
   },
   {
     key: 'a4',
-    icon: <ClusterOutlined style={{ color: '#722ed1' }} />,
+    icon: <ClusterOutlined style={{ color: 'var(--accent)' }} />,
     text: '费用结构中哪一项增长最异常，为什么？',
   },
 ];

@@ -5,141 +5,7 @@
   padding: 0;
 }
 
-body {
-  background-color: #f4f6fa;
-  color: #262626;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  min-height: 100vh;
-  -webkit-font-smoothing: antialiased;
-}
-
-.chatbi-app-layout {
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-}
-
-/* 顶部 Header */
-.chatbi-header {
-  background: #ffffff;
-  border-bottom: 1px solid #e8ecf2;
-  padding: 12px 32px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  position: sticky;
-  top: 0;
-  z-index: 100;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.03);
-}
-
-.header-brand {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.brand-logo {
-  width: 40px;
-  height: 40px;
-  background: #e6f4ff;
-  border-radius: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-/* 主体容器 */
-.chatbi-main-container {
-  width: 100%;
-  max-width: 1080px;
-  margin: 0 auto;
-  padding: 24px 16px 64px;
-  flex: 1;
-}
-
-/* 输入区域 */
-.query-input-section {
-  background: #ffffff;
-  border-radius: 12px;
-  padding: 16px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04);
-  border: 1px solid #e8ecf2;
-  margin-bottom: 24px;
-}
-
-.prompt-suggestions-wrapper {
-  margin-top: 8px;
-  padding-top: 12px;
-  border-top: 1px dashed #f0f0f0;
-}
-
-.prompt-header {
-  margin-bottom: 8px;
-}
-
-/* 查询卡片 */
-.query-card-item {
-  border: 1px solid #e8ecf2;
-  transition: all 0.2s ease;
-}
-
-.query-card-item:hover {
-  border-color: #d0d7e2;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.06) !important;
-}
-
-.query-question-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding-bottom: 12px;
-  border-bottom: 1px solid #f5f5f5;
-}
-
-.question-content {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex: 1;
-}
-
-.q-badge {
-  width: 26px;
-  height: 26px;
-  background: #1677ff;
-  color: #ffffff;
-  border-radius: 6px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 700;
-  font-size: 13px;
-  flex-shrink: 0;
-}
-
-.question-actions {
-  display: flex;
-  align-items: center;
-}
-
 /* SQL 展示区 */
-.sql-viewer-card {
-  background: #181825;
-  border-radius: 8px;
-  overflow: hidden;
-  border: 1px solid #313244;
-}
-
-.sql-viewer-header {
-  background: #11111b;
-  padding: 8px 16px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  border-bottom: 1px solid #313244;
-}
-
 .sql-header-title {
   color: #cdd6f4;
   font-size: 13px;
@@ -182,16 +48,6 @@ body {
 }
 
 /* SQL 关键字高亮样式 */
-.sql-token-keyword {
-  color: #cba6f7;
-  font-weight: 600;
-}
-
-.sql-token-function {
-  color: #89b4fa;
-  font-weight: 600;
-}
-
 .sql-token-string {
   color: #a6e3a1;
 }
@@ -209,7 +65,7 @@ body {
   display: inline-block;
   width: 7px;
   height: 16px;
-  background: #89b4fa;
+  background: #93d2b9;
   animation: sql-blink 0.8s infinite;
   vertical-align: text-bottom;
   margin-left: 2px;
@@ -268,55 +124,9 @@ body {
   color: #333;
 }
 
-/* 状态流 ThoughtChain 容器 */
-.status-chain-wrapper {
-  background: #fbfcfe;
-  border: 1px solid #eef2f7;
-  border-radius: 8px;
-  padding: 12px 16px;
-}
-
-/* 空状态欢迎界面 */
-.empty-state-container {
-  background: #ffffff;
-  border-radius: 12px;
-  padding: 40px 24px;
-  text-align: center;
-  border: 1px solid #e8ecf2;
-}
-
-.feature-intro-card {
-  background: #fafbfc;
-  border: 1px solid #f0f2f5;
-  border-radius: 8px;
-  padding: 12px;
-  text-align: center;
-}
-
-.feature-icon {
-  margin-bottom: 4px;
-}
-
 /* ==================== 归因分析 ==================== */
 
 /* 输入区模式切换 */
-.input-mode-row {
-  display: flex;
-  align-items: center;
-  margin-bottom: 12px;
-}
-
-/* 归因卡片标识与普通查询区分开 */
-.q-badge.analysis-badge {
-  background: #722ed1;
-  font-size: 11px;
-  letter-spacing: 0.5px;
-}
-
-.analysis-card-item {
-  border: 1px solid #ede7f6;
-}
-
 /* 运行中的总进度条 */
 .analysis-progress-wrapper {
   margin-top: 12px;
@@ -324,14 +134,6 @@ body {
 }
 
 /* 分析过程容器 */
-.analysis-process {
-  margin-top: 14px;
-  padding: 16px;
-  background: #fbfcfe;
-  border: 1px solid #eef2f7;
-  border-radius: 8px;
-}
-
 .analysis-stage-bar {
   margin-bottom: 20px;
   padding-bottom: 16px;
@@ -352,7 +154,7 @@ body {
 }
 
 .analysis-goal {
-  background: #f3f0fb;
+  background: #f4f6f8;
   border-radius: 6px;
   padding: 10px 12px;
   margin-bottom: 12px;
@@ -379,14 +181,14 @@ body {
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  background: #f3f0fb;
-  color: #722ed1;
   font-size: 11px;
   font-weight: 600;
   display: flex;
   align-items: center;
   justify-content: center;
   margin-top: 1px;
+  background: #e9f5f0;
+  color: #197263;
 }
 
 .analysis-subtask-body {
@@ -548,7 +350,7 @@ body {
 
 /* 归因分析结论是核心产出，单独强调 */
 .analysis-report-section.is-highlight {
-  background: #fff8f7;
+  background: #f1f8f5;
   border-radius: 8px;
   padding: 14px 14px;
   margin: 4px 0;
@@ -600,79 +402,10 @@ body {
 .query-rewritten-hint {
   margin-top: 8px;
   padding: 6px 12px;
-  background: #f0f7ff;
-  border-left: 3px solid #1677ff;
+  background: #e8f5f1;
+  border-left: 3px solid var(--accent);
   border-radius: 4px;
   line-height: 1.6;
-}
-
-/* ==================== 会话侧边栏 ==================== */
-
-.chatbi-body {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-}
-
-.session-sidebar {
-  width: 240px;
-  flex-shrink: 0;
-  border-right: 1px solid #e8ecf2;
-  background: #fafbfc;
-  padding: 12px 8px;
-  overflow-y: auto;
-}
-
-.session-list {
-  list-style: none;
-  margin: 8px 0 0;
-  padding: 0;
-}
-
-.session-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  cursor: pointer;
-  margin-bottom: 2px;
-}
-
-.session-item:hover {
-  background: #eef3fb;
-}
-
-.session-item.active {
-  background: #e6f0ff;
-}
-
-.session-item .session-icon {
-  color: #8c8c8c;
-  flex-shrink: 0;
-}
-
-.session-item.active .session-icon {
-  color: #1677ff;
-}
-
-.session-item-body {
-  flex: 1;
-  min-width: 0;
-}
-
-.session-item-title {
-  font-size: 13px;
-  color: #1f1f1f;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.session-item-meta {
-  font-size: 11px;
-  color: #b0b7c3;
-  margin-top: 2px;
 }
 
 /* Workspace shell */
@@ -689,11 +422,19 @@ body {
   background: var(--canvas);
   color: var(--ink);
   font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
 }
 
-.chatbi-app-layout { flex-direction: row; min-height: 100vh; }
+.chatbi-app-layout { display: flex; flex-direction: row; min-height: 100vh; }
 .workspace-shell { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .chatbi-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 100;
   height: 72px;
   flex-shrink: 0;
   padding: 0 36px;
@@ -731,6 +472,7 @@ body {
 /* Navigation */
 .session-sidebar {
   width: 252px;
+  flex-shrink: 0;
   padding: 0 13px 17px;
   background: #10242a;
   border-right: 1px solid #1b383d;
@@ -772,16 +514,17 @@ body {
   border: 0 !important; font-weight: 700; box-shadow: none;
 }
 .sidebar-new-button:hover { background: #c4eadc !important; }
-.session-list { margin-top: 4px; }
-.session-item { padding: 10px 10px; margin-bottom: 3px; border: 1px solid transparent; }
+.session-list { list-style: none; margin: 4px 0 0; padding: 0; }
+.session-item { display: flex; align-items: center; gap: 8px; padding: 10px; border: 1px solid transparent; border-radius: 8px; cursor: pointer; margin-bottom: 3px; }
 .session-item:hover { background: #1a383b; }
 .session-item.active { background: #1e4443; border-color: #305d57; }
-.session-item .session-icon, .session-item.active .session-icon { color: #84a7a6; }
+.session-item .session-icon { color: #84a7a6; flex-shrink: 0; }
 .session-item.active .session-icon { color: #a8e7d1; }
-.session-item-title { color: #dbe9e7; font-size: 12px; }
-.session-item-meta { color: #759594; font-size: 11px; }
+.session-item-body { flex: 1; min-width: 0; }
+.session-item-title { color: #dbe9e7; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.session-item-meta { color: #759594; font-size: 11px; margin-top: 2px; }
 .session-item .ant-btn { color: #779796 !important; }
-.session-empty { color: #8aa6a5; text-align: left; padding: 18px 12px; }
+.session-empty { color: #8aa6a5; text-align: left; padding: 18px 12px; font-size: 12px; line-height: 1.8; }
 .sidebar-footer {
   margin-top: auto; padding: 18px 10px 0; border-top: 1px solid #244146;
   color: #779795; font-size: 10px; line-height: 1.5;
@@ -789,7 +532,7 @@ body {
 .sidebar-footer-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #69c9a8; margin-right: 7px; }
 
 /* Main workspace */
-.chatbi-main-container { width: 100%; max-width: 1240px; padding: 39px 44px 80px; }
+.chatbi-main-container { width: 100%; max-width: 1240px; margin: 0 auto; padding: 39px 44px 80px; flex: 1; }
 .workspace-heading { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 27px; }
 .workspace-eyebrow, .composer-kicker, .feed-section-kicker { color: var(--accent); font-size: 10px; font-weight: 800; letter-spacing: 1.65px; }
 .workspace-heading h1 { color: var(--ink); font-size: 30px; line-height: 1.2; letter-spacing: -1.2px; margin: 7px 0 9px; font-weight: 750; }
@@ -803,7 +546,7 @@ body {
 }
 .composer-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; margin-bottom: 20px; }
 .composer-header h2 { font-size: 19px; letter-spacing: -.5px; color: #1d3135; margin: 6px 0 0; font-weight: 720; }
-.input-mode-row { margin-bottom: 0; }
+.input-mode-row { display: flex; align-items: center; margin-bottom: 0; }
 .input-mode-row .ant-segmented { background: #f1f5f4; padding: 4px; border-radius: 9px; }
 .input-mode-row .ant-segmented-item { color: #5e7377; font-size: 12px; }
 .input-mode-row .ant-segmented-item-selected { color: #0e665e; font-weight: 700; box-shadow: 0 1px 4px rgba(13,65,60,.09); }
@@ -829,26 +572,26 @@ body {
   margin-bottom: 15px; border: 1px solid var(--line); border-radius: 14px;
   box-shadow: 0 3px 16px rgba(27,57,60,.035); overflow: hidden;
 }
+.query-card-item { transition: all 0.2s ease; }
 .query-card-item:hover { border-color: #c8d8d4; box-shadow: 0 5px 18px rgba(25,60,58,.06) !important; }
 .query-card-item .ant-card-body { padding: 21px 24px 24px; }
-.query-question-row { padding-bottom: 17px; border-bottom: 1px solid #edf1f0; gap: 16px; }
-.question-content { gap: 12px; min-width: 0; }
+.query-question-row { display: flex; align-items: center; justify-content: space-between; padding-bottom: 17px; border-bottom: 1px solid #edf1f0; gap: 16px; }
+.question-content { display: flex; align-items: center; flex: 1; gap: 12px; min-width: 0; }
 .question-title.ant-typography { color: #203136; font-size: 15px; line-height: 1.45; }
 .q-badge, .q-badge.analysis-badge {
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
   width: auto; height: auto; padding: 5px 9px; border-radius: 6px;
   background: #e8f5f1; color: #177567; font-size: 10px; font-weight: 750;
   white-space: nowrap; letter-spacing: 0;
 }
 .q-badge.analysis-badge { background: #eeeffa; color: #5f67a8; }
-.question-actions { flex-shrink: 0; }
-.status-chain-wrapper, .analysis-process { background: #fbfcfc; border-color: #e8eeec; border-radius: 10px; }
-.analysis-goal { background: #f4f6f8; }
-.analysis-subtask-index { background: #e9f5f0; color: #197263; }
-.analysis-report-section.is-highlight { background: #f1f8f5; }
-.sql-viewer-card { border-radius: 10px; background: #17232b; border-color: #263942; }
-.sql-viewer-header { background: #122029; border-color: #263942; }
-.sql-token-keyword { color: #9dcbd2; }
-.sql-token-function { color: #93d2b9; }
+.question-actions { display: flex; align-items: center; flex-shrink: 0; }
+.status-chain-wrapper { background: #fbfcfc; border: 1px solid #e8eeec; border-radius: 10px; padding: 12px 16px; }
+.analysis-process { margin-top: 14px; padding: 16px; background: #fbfcfc; border: 1px solid #e8eeec; border-radius: 10px; }
+.sql-viewer-card { overflow: hidden; border: 1px solid #263942; border-radius: 10px; background: #17232b; }
+.sql-viewer-header { display: flex; align-items: center; justify-content: space-between; padding: 8px 16px; background: #122029; border-bottom: 1px solid #263942; }
+.sql-token-keyword { color: #9dcbd2; font-weight: 600; }
+.sql-token-function { color: #93d2b9; font-weight: 600; }
 .empty-state-container {
   min-height: 215px; border-radius: 14px; padding: 39px 24px;
   background: #fff; border: 1px dashed #d6e1df;
@@ -888,14 +631,6 @@ body {
   .question-actions { width: 100%; justify-content: flex-end; }
 }
 
-.session-empty {
-  text-align: center;
-  color: #b0b7c3;
-  font-size: 12px;
-  padding: 24px 8px;
-  line-height: 1.8;
-}
-
 /* Sign in */
 .auth-page { min-height: 100vh; display: grid; grid-template-columns: minmax(360px, 45%) 1fr; background: #f7f9f8; }
 .auth-intro {
@@ -924,8 +659,6 @@ body {
 .auth-card .ant-form-item { margin-bottom: 17px; }
 .auth-card .ant-form-item:last-child { margin-bottom: 6px; }
 .auth-form-foot { color: #a3b0b1; font-size: 11px; margin-top: 22px; }
-
-.session-sidebar .session-empty { color: #8aa6a5; text-align: left; padding: 18px 12px; }
 
 @media (max-width: 780px) {
   .auth-page { grid-template-columns: 1fr; }

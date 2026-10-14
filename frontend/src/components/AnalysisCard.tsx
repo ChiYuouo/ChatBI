@@ -110,7 +110,7 @@ export const AnalysisCard: React.FC<AnalysisCardProps> = ({
                 size="small"
                 icon={<BranchesOutlined />}
                 onClick={() => setShowProcess((prev) => !prev)}
-                style={{ color: showProcess ? '#1677ff' : '#8c8c8c' }}
+                style={{ color: showProcess ? 'var(--accent)' : '#8c8c8c' }}
               >
                 {showProcess ? <UpOutlined /> : <DownOutlined />}
               </Button>
@@ -195,7 +195,7 @@ export const AnalysisCard: React.FC<AnalysisCardProps> = ({
           {(record.analysisGoal || subtasks.length > 0) && (
             <div className="analysis-decomposition">
               <div className="analysis-section-title">
-                <PartitionOutlined style={{ color: '#722ed1', marginRight: 6 }} />
+                <PartitionOutlined style={{ color: 'var(--accent)', marginRight: 6 }} />
                 <Text strong style={{ fontSize: 14 }}>
                   问题拆解
                 </Text>

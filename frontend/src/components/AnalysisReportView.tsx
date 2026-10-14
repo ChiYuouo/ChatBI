@@ -103,7 +103,7 @@ export const AnalysisReportView: React.FC<AnalysisReportViewProps> = ({
     <div className="analysis-report">
       <div className="analysis-section-title analysis-report-header">
         <div>
-          <FileTextOutlined style={{ color: '#1677ff', marginRight: 6 }} />
+          <FileTextOutlined style={{ color: 'var(--accent)', marginRight: 6 }} />
           <Text strong style={{ fontSize: 14 }}>
             归因分析报告
           </Text>
@@ -130,7 +130,7 @@ export const AnalysisReportView: React.FC<AnalysisReportViewProps> = ({
           </Text>
         </div>
 
-        <Section icon={<AimOutlined style={{ color: '#1677ff' }} />} title="执行摘要">
+        <Section icon={<AimOutlined style={{ color: 'var(--accent)' }} />} title="执行摘要">
           <Paragraph style={{ margin: 0, fontSize: 13, lineHeight: 1.7 }}>
             {report.executive_summary || '—'}
           </Paragraph>
@@ -162,10 +162,10 @@ export const AnalysisReportView: React.FC<AnalysisReportViewProps> = ({
           </Paragraph>
         </Section>
 
-        <Section icon={<ThunderboltOutlined style={{ color: '#722ed1' }} />} title="行动建议">
+        <Section icon={<ThunderboltOutlined style={{ color: 'var(--accent)' }} />} title="行动建议">
           <BulletList
             items={report.action_suggestions}
-            accent="#722ed1"
+            accent="var(--accent)"
             emptyHint="暂无行动建议。"
           />
         </Section>

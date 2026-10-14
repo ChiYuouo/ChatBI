@@ -67,7 +67,7 @@ export const QueryCard: React.FC<QueryCardProps> = ({
                 size="small"
                 icon={<BranchesOutlined />}
                 onClick={() => setShowThoughtChain((prev) => !prev)}
-                style={{ color: showThoughtChain ? '#1677ff' : '#8c8c8c' }}
+                style={{ color: showThoughtChain ? 'var(--accent)' : '#8c8c8c' }}
               >
                 {showThoughtChain ? <UpOutlined /> : <DownOutlined />}
               </Button>
@@ -101,7 +101,7 @@ export const QueryCard: React.FC<QueryCardProps> = ({
         <div className="query-rewritten-hint">
           <Text type="secondary" style={{ fontSize: 13 }}>
             已结合上文理解为：
-            <Text style={{ color: '#1677ff' }}>{record.rewrittenQuestion}</Text>
+            <Text style={{ color: 'var(--accent)' }}>{record.rewrittenQuestion}</Text>
           </Text>
         </div>
       )}
