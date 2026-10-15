@@ -73,7 +73,8 @@ class LLMClient:
                 {"role": "user", "content": prompt}
             ],
             temperature=self.temperature,
-            max_tokens=self.max_tokens
+            max_tokens=self.max_tokens,
+            extra_body={"enable_thinking": False},
         )
         return response.choices[0].message.content.strip()
 
@@ -88,6 +89,7 @@ class LLMClient:
             ],
             temperature=self.temperature,
             max_tokens=self.max_tokens,
+            extra_body={"enable_thinking": False},
             stream=True,
         )
         try:

@@ -178,6 +178,7 @@ class QueryDecomposer:
             temperature=0,
             max_tokens=self.llm.max_tokens,
             response_format={"type": "json_object"},
+            extra_body={"enable_thinking": False},
         )
         content = response.choices[0].message.content
         if not content:
