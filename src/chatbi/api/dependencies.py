@@ -49,11 +49,7 @@ def _resolve_query_options(payload: QueryRequest, app_config: dict) -> dict[str,
             if payload.use_indicator_knowledge is not None
             else feature_defaults.get("indicator_knowledge", False)
         ),
-        "use_schema_linking": (
-            payload.use_schema_linking
-            if payload.use_schema_linking is not None
-            else feature_defaults.get("schema_linking", False)
-        ),
+        "use_schema_linking": payload.use_schema_linking if payload.use_schema_linking is not None else feature_defaults.get("schema_linking", False),
         "use_indicator_rag": (
             payload.use_indicator_rag
             if payload.use_indicator_rag is not None
@@ -79,11 +75,7 @@ def _resolve_analyze_options(payload: AnalyzeRequest, app_config: dict) -> dict[
             if payload.use_indicator_knowledge is not None
             else feature_defaults.get("indicator_knowledge", False)
         ),
-        "use_schema_linking": (
-            payload.use_schema_linking
-            if payload.use_schema_linking is not None
-            else feature_defaults.get("schema_linking", False)
-        ),
+        "use_schema_linking": payload.use_schema_linking if payload.use_schema_linking is not None else feature_defaults.get("schema_linking", False),
         "use_indicator_rag": (
             payload.use_indicator_rag
             if payload.use_indicator_rag is not None

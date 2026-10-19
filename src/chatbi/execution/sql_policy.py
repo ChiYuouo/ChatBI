@@ -10,24 +10,10 @@ from sqlglot.errors import OptimizeError, ParseError, SqlglotError
 from sqlglot.optimizer.qualify import qualify
 from sqlglot.optimizer.scope import traverse_scope
 
-from chatbi.core.security import SQLGenerationError, SecurityError
+from chatbi.core.security import SQLGenerationError, SchemaRequiredError, SecurityError
 
 if TYPE_CHECKING:
     from chatbi.core.security import SecurityPolicy, UserContext
-
-
-# 当前仅支持现有制造业五表；不同 Schema 必须发布新的可信元数据。
-BUSINESS_SCHEMA = {
-    "dim_customers": dict.fromkeys(
-        "customer_id customer_name customer_type industry country region".split(), "UNKNOWN"),
-    "dim_products": dict.fromkeys(
-        "product_id product_name product_line category tech_route standard_cost material_cost labor_cost".split(), "UNKNOWN"),
-    "sales_orders": dict.fromkeys(
-        "order_id order_no customer_id product_id region order_date order_status quantity unit_price discount_amount gross_amount net_amount currency".split(), "UNKNOWN"),
-    "exchange_rates": dict.fromkeys("rate_date currency rate_to_cny".split(), "UNKNOWN"),
-    "finance_expenses": dict.fromkeys(
-        "expense_id expense_date department rd_expense selling_expense admin_expense finance_expense marketing_expense logistics_expense warranty_expense".split(), "UNKNOWN"),
-}
 
 
 class SQLPolicy:
@@ -46,7 +32,18 @@ class SQLPolicy:
         CONCAT CONCAT_WS LOWER UPPER LENGTH CHAR_LENGTH SUBSTRING TRIM FIELD
     """.split())
 
-    def secure(self, sql: str, user: UserContext, policy: SecurityPolicy) -> str:
+    def secure(self, sql: str, user: UserContext, policy: SecurityPolicy, schema: dict | None = None,
+               allowed_tables: list[str] | None = None) -> str:
+        canonical_tables = {name.lower(): name for name in (schema or {}).keys()}
+        active_schema = {
+            name.lower(): {column.lower(): kind for column, kind in columns.items()}
+            for name, columns in (schema or {}).items()
+        }
+        if policy.allowed_tables is not None:
+            active_schema = {name: columns for name, columns in active_schema.items() if name in policy.allowed_tables}
+        allowed = {name.lower() for name in allowed_tables} if allowed_tables is not None else None
+        if allowed is not None:
+            active_schema = {name: columns for name, columns in active_schema.items() if name in allowed}
         normalized = re.sub(r"^```(?:sql)?\s*|```$", "", sql.strip(), flags=re.I).strip()
         if not normalized:
             raise SecurityError("SQL 不能为空。")
@@ -57,10 +54,24 @@ class SQLPolicy:
             if len(statements) != 1 or not isinstance(statements[0], (exp.Select, exp.Union)):
                 raise SecurityError("只允许执行查询语句，且必须是单条 SQL。")
             tree = statements[0]
-            self._validate_structure(tree)
+            self._validate_structure(tree, active_schema)
             for identifier in tree.find_all(exp.Identifier):
                 identifier.set("this", identifier.name.lower())
-            tree = qualify(tree, dialect="mysql", schema=BUSINESS_SCHEMA,
+            # 先拒绝危险语法和显式越权，再让缺少元数据的直接执行入口读取真实结构。
+            # SELECT 1 等不访问物理表的查询无需数据库结构。
+            for scope in traverse_scope(tree):
+                for _, source in scope.selected_sources.values():
+                    if not isinstance(source, exp.Table):
+                        continue
+                    name = source.name
+                    if (name in policy.denied_tables
+                        or policy.allowed_tables is not None and name not in policy.allowed_tables
+                        or allowed is not None and name not in allowed):
+                        raise SecurityError(f"无权访问表：{name}。")
+                    if schema is None:
+                        raise SchemaRequiredError("缺少当前数据源的可信结构，不能校验物理表查询。")
+                    self._validate_table(source, policy, active_schema)
+            tree = qualify(tree, dialect="mysql", schema=active_schema,
                            infer_schema=False, validate_qualify_columns=True)
             physical_tables = []
             for scope in traverse_scope(tree):
@@ -68,7 +79,7 @@ class SQLPolicy:
                     raise SecurityError("暂不支持相关子查询，请拆成独立查询。")
                 for _, source in scope.selected_sources.values():
                     if isinstance(source, exp.Table):
-                        self._validate_table(source, policy)
+                        self._validate_table(source, policy, active_schema)
                         physical_tables.append(source)
                 for column in scope.columns:
                     source = scope.sources.get(column.table)
@@ -81,9 +92,15 @@ class SQLPolicy:
                 regions = tuple(user.allowed_regions) if user.allowed_regions else (user.region,)
                 for table in physical_tables:
                     if table.name in {"sales_orders", "dim_customers"}:
-                        self._restrict_region(table, regions, policy)
+                        self._restrict_region(table, regions, policy, active_schema)
             for node in tree.walk():
                 node.pop_comments()
+            if schema is not None:
+                # SQL 内统一用小写做元数据匹配，执行前还原 MySQL 表的真实大小写。
+                for table in tree.find_all(exp.Table):
+                    original_name = canonical_tables.get(table.name.lower())
+                    if original_name:
+                        table.set("this", exp.to_identifier(original_name))
             return tree.sql(dialect="mysql", identify=True, unsupported_level=sqlglot.ErrorLevel.RAISE)
         except OptimizeError as exc:
             match = re.search(r"Column '([^']+)' could not be resolved", str(exc))
@@ -97,7 +114,7 @@ class SQLPolicy:
         except SqlglotError as exc:
             raise SecurityError("SQL 不在已支持的安全范围内，或表/字段无法确定。") from exc
 
-    def _validate_structure(self, tree: exp.Expression) -> None:
+    def _validate_structure(self, tree: exp.Expression, active_schema: dict) -> None:
         for node in tree.walk():
             if isinstance(node, exp.Var) and (
                 isinstance(node.parent, (exp.Interval, exp.DateAdd, exp.DateSub, exp.DateDiff)) and node.parent.args.get("unit") is node
@@ -119,7 +136,7 @@ class SQLPolicy:
                 raise SecurityError("不允许跨库或系统表查询。")
             if isinstance(node, exp.With) and node.args.get("recursive"):
                 raise SecurityError("暂不支持递归 CTE。")
-            if isinstance(node, exp.CTE) and node.alias_or_name.lower() in BUSINESS_SCHEMA:
+            if isinstance(node, exp.CTE) and node.alias_or_name.lower() in active_schema:
                 raise SecurityError("CTE 不能遮蔽已授权的业务表。")
             if isinstance(node, exp.Join):
                 if node.side.upper() not in {"", "LEFT"} or node.kind.upper() not in {"", "INNER", "OUTER"}:
@@ -130,20 +147,26 @@ class SQLPolicy:
                     raise SecurityError("JOIN 必须使用明确的 ON 条件。")
 
     @staticmethod
-    def _validate_table(table: exp.Table, policy: SecurityPolicy) -> None:
-        if table.name not in BUSINESS_SCHEMA or table.name in policy.denied_tables:
+    def _validate_table(table: exp.Table, policy: SecurityPolicy, schema: dict) -> None:
+        if table.name not in schema or table.name in policy.denied_tables:
             raise SecurityError(f"无权访问表：{table.name}。")
 
     @staticmethod
-    def _restrict_region(table: exp.Table, regions: tuple[str, ...], policy: SecurityPolicy) -> None:
+    def _restrict_region(table: exp.Table, regions: tuple[str, ...], policy: SecurityPolicy, schema: dict) -> None:
         # 过滤在基础表的派生查询里，OR 和 LEFT JOIN 不会冲掉或改变范围。
         alias = table.alias_or_name
         base = exp.to_table(table.name)
         allowed = exp.column("region").isin(*[exp.Literal.string(region) for region in regions])
         if table.name == "sales_orders":
+            if "customer_id" not in schema[table.name] or not {"customer_id", "region"}.issubset(schema.get("dim_customers", {})):
+                raise SecurityError("当前结构缺少销售区域关联所需字段，拒绝执行查询。")
             # 客户归属为授权事实源，不信任订单自身冗余 region。
             customers = exp.select("customer_id").from_("dim_customers").where(allowed)
             allowed = exp.In(this=exp.column("customer_id"), query=customers.subquery())
-        columns = [exp.column(name) for name in BUSINESS_SCHEMA[table.name] if name not in policy.denied_columns]
+        elif "region" not in schema[table.name]:
+            raise SecurityError("当前结构缺少区域字段，拒绝执行查询。")
+        columns = [exp.column(name) for name in schema[table.name] if name not in policy.denied_columns]
+        if not columns:
+            raise SecurityError("当前表没有可访问字段。")
         restricted = exp.select(*columns).from_(base).where(allowed)
         table.replace(restricted.subquery(alias=alias))

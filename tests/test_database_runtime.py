@@ -3,11 +3,11 @@ import pymysql
 import pytest
 
 from chatbi.infrastructure.database import (
-    DatabaseClient,
     DatabaseConnectionPool,
     QueryExecutionError,
 )
 from chatbi.core.security import UserContext
+from schema_fixtures import FixtureDatabaseClient as DatabaseClient
 
 
 class ExplainableCursor:
@@ -199,6 +199,9 @@ def test_chatbi_system_returns_granular_database_error_type_for_timeout():
             return "SELECT * FROM sales_orders"
 
     class FakeDB:
+        def describe_schema(self, budget=None):
+            return [{"table_name": "sales_orders", "columns": [{"name": "order_id", "type": "int"}], "keys": []}]
+
         def execute_query(self, sql: str, user=None, budget=None):
             raise QueryExecutionError(
                 "query_timeout",

@@ -27,6 +27,8 @@ from chatbi.analysis.agent_planner import (
 from chatbi.analysis.query_decomposer import QueryDecomposer
 from chatbi.analysis.report_generator import ReportGenerator
 from chatbi.bootstrap.runtime_factory import build_runtime
+from chatbi.infrastructure.database import QueryExecutionError
+from chatbi.infrastructure.database_schema import render_schema
 from chatbi.core.config import APP_CONFIG
 from chatbi.core.security import QuerySecurityManager, SecurityError, UserContext
 from chatbi.services.chatbi_service import ChatBISystem
@@ -81,7 +83,7 @@ class AnalysisService:
         # None 时跳过保存（测试与直接调用场景兼容）。
         self.session_store = session_store
 
-    def _bind_llm(self, runtime: Any):
+    def _bind_llm(self, runtime: Any, schema_tables: list[dict] | None = None):
         """把链路各阶段的 LLM 客户端统一绑定到当前 runtime 的实例上。
 
         拆解器和报告生成器若各自新建 LLMClient，会绕过传入的 runtime，
@@ -99,6 +101,8 @@ class AnalysisService:
 
         if isinstance(decomposer, QueryDecomposer):
             decomposer.llm = llm
+            decomposer.schema_text = getattr(runtime, "schema_text", "")
+            decomposer.schema_tables = schema_tables
             # 真实 LLMClient 支持 client.chat(...) 的 JSON 模式，优先走原生实现；
             # 注入的假实现没有该结构，则回退到 generate_text，保证可注入性。
             if hasattr(getattr(llm, "client", None), "chat"):
@@ -122,6 +126,8 @@ class AnalysisService:
             yield "error", {"error": str(exc), "error_type": "database_budget_exceeded"}
         except IndexNotReady as exc:
             yield "error", {"error": str(exc), "error_type": "retrieval_not_ready"}
+        except QueryExecutionError as exc:
+            yield "error", {"error": str(exc), "error_type": f"database_{exc.error_type}"}
         finally:
             for runtime in resources:
                 for resource in (runtime.db, runtime.llm):
@@ -173,16 +179,25 @@ class AnalysisService:
             "use_indicator_knowledge": features.get("indicator_knowledge", False),
             **{key: value for key, value in (chatbi_run_options or {}).items() if value is not None},
         }
-        require_indexes({"schema_linking": run_options["use_schema_linking"], "indicator_rag": run_options["use_indicator_rag"]})
+        require_indexes({"indicator_rag": run_options["use_indicator_rag"]})
 
         # 整条链路复用同一个 runtime，避免每个子步骤各建一个数据库连接池
         runtime = self.runtime_factory(self.app_config, source_id=source_id)
         resources.append(runtime)
+        load_tables = getattr(runtime, "get_schema_tables", None)
+        schema_tables = None
+        if callable(load_tables):
+            schema_tables = load_tables(execution_budget, user_context)
+            schema_text = render_schema(schema_tables)
+        else:
+            load_schema = getattr(runtime, "get_schema_text", None)
+            schema_text = load_schema(execution_budget, user_context) if callable(load_schema) else getattr(runtime, "schema_text", "")
         execution_budget.remaining()
         runtime = copy(runtime)
+        runtime.schema_text = schema_text
         runtime.llm = BudgetedLLM(runtime.llm, execution_budget)
         system = ChatBISystem(runtime=runtime, app_config=self.app_config)
-        decomposer, report_generator = self._bind_llm(runtime)
+        decomposer, report_generator = self._bind_llm(runtime, schema_tables)
 
         yield "start", {
             "question": question,
@@ -286,6 +301,7 @@ class AnalysisService:
                 user_id=user_context.user_id,
                 question=question,
                 answer=report.markdown or None,
+                source_id=source_id or runtime.source_id,
             )
 
         yield "done", {

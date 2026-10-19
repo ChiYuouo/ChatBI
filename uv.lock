@@ -410,6 +410,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "chromadb" },
+    { name = "cryptography" },
     { name = "fastapi" },
     { name = "filelock" },
     { name = "langchain-chroma" },
@@ -432,6 +433,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "chromadb", specifier = ">=1.5.9" },
+    { name = "cryptography", specifier = ">=45.0.0" },
     { name = "fastapi", specifier = ">=0.141.1" },
     { name = "filelock", specifier = ">=3.20" },
     { name = "langchain-chroma", specifier = ">=1.1.0" },

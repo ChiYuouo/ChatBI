@@ -12,7 +12,6 @@ from typing import Callable
 from pydantic import BaseModel, Field, ValidationError
 
 from chatbi.infrastructure.llm_client import LLMClient
-from chatbi.text2sql.prompt_builder import SCHEMA
 
 
 class DecomposedTask(BaseModel):
@@ -35,21 +34,29 @@ class DecompositionPlan(BaseModel):
     subtasks: list[DecomposedTask]
 
 
-AVAILABLE_DIMENSIONS = [
-    "月份",
-    "客户",
-    "客户类型",
-    "行业",
-    "国家",
-    "区域",
-    "产品",
-    "产品线",
-    "品类", # 品种类型 category
-    "技术路线",
-    "部门",
-    "费用项目",
-    "原因类型",
-]
+def build_dimension_catalog(schema_text: str, schema_tables: list[dict] | None = None) -> dict[str, str]:
+    """维度候选来自当前可见字段；注释用于说明，表名.字段名用于消除同名歧义。"""
+    if schema_tables is not None:
+        return {f"{table['table_name']}.{column['name']}": column.get("comment") or column["name"]
+                for table in schema_tables for column in table["columns"]}
+
+    catalog = {}
+    table_name = ""
+    for line in schema_text.splitlines():
+        table = re.match(r"^表：([^（]+?)(?:（.*)?$", line.strip())
+        if table:
+            table_name = table.group(1).strip()
+            continue
+        column = re.match(r"^- (\S+) .+? (?:可空|不可空)；(.*)$", line.strip())
+        if table_name and column:
+            catalog[f"{table_name}.{column.group(1)}"] = column.group(2).strip() or column.group(1)
+        compact = re.fullmatch(r"\s*([\w]+)\(([^()]*)\)\s*", line)
+        if compact:
+            for field in compact.group(2).split(","):
+                name = field.strip().split()
+                if name:
+                    catalog[f"{compact.group(1)}.{name[0]}"] = name[0]
+    return catalog
 
 
 def _load_indicator_catalog() -> list[str]:
@@ -75,10 +82,12 @@ def _max_tasks_for_question_type(question_type: str) -> int:
     return 8
 
 
-def build_decomposition_prompt(user_question: str) -> tuple[str, str]:
+def build_decomposition_prompt(user_question: str, schema_text: str,
+                               dimension_catalog: dict[str, str] | None = None) -> tuple[str, str]:
     """构造 Query 拆解 Prompt。"""
     indicator_catalog = "、".join(_load_indicator_catalog())
-    dimension_catalog = "、".join(AVAILABLE_DIMENSIONS)
+    dimensions = build_dimension_catalog(schema_text) if dimension_catalog is None else dimension_catalog
+    dimension_text = "\n".join(f"- {name}：{description}" for name, description in dimensions.items())
     system_msg = (
         "你是企业级 ChatBI 系统中的任务拆解器。"
         "请把复杂分析问题拆成可执行的子任务列表，"
@@ -86,10 +95,10 @@ def build_decomposition_prompt(user_question: str) -> tuple[str, str]:
     )
     prompt = f"""
 【数据库 Schema】
-{SCHEMA}
+{schema_text}
 
 【可用分析维度】
-{dimension_catalog}
+{dimension_text or '当前结构没有可识别的维度字段，不得自行补充业务维度'}
 
 【可用指标】
 {indicator_catalog}
@@ -112,14 +121,14 @@ def build_decomposition_prompt(user_question: str) -> tuple[str, str]:
 4. depends_on 只能引用前面已经出现的 task_id
 5. 每个子任务都应尽量对应一条简单 SQL 或一个单独分析动作，不要把多个分析都塞进同一步
 6. 仅返回 JSON 对象，不要使用 Markdown
-7. 维度只能从【可用分析维度】中选择；如用户问题提到未建模维度，应回退到最接近的已建模维度
+7. dimensions 只能从【可用分析维度】中选择，填写完整的“表名.字段名”；字段注释用于理解业务含义，不能凭空增加维度，也不能把缺失维度替换成含义不同的字段。无需分组的任务可以填写空数组
 8. 指标优先复用【可用指标】中的名称或别名
 9. 如果一个任务同时要求多个维度或多个驱动因素，请拆成多个更简单的子任务
-10. 每个查询子任务的 description 必须保留原问题的时间、区域、订单状态与币种要求；“所有”仅指原范围内的记录
-11. 子任务按业务指标组织；能够用一条 SQL 完成的统计，不要拆成仅过滤订单、关联表、再汇总的技术步骤
+10. 每个查询子任务的 description 必须保留原问题的时间、筛选条件、统计范围与单位要求；“所有”仅指原范围内的记录。按月、按年等时间粒度写入 description，dimensions 填写实际使用的日期字段
+11. 子任务按业务指标组织；能够用一条 SQL 完成的统计，不要拆成仅过滤记录、关联表、再汇总的技术步骤
 
 【常见分析类型拆解策略】
-1. 趋势分析：优先拆成“主指标趋势 + 关键驱动项趋势 + 异常月份定位 + 原因归纳”，通常不超过 6 个子任务
+1. 趋势分析：优先拆成“主指标趋势 + 关键驱动项趋势 + 异常时间段定位 + 原因归纳”，通常不超过 6 个子任务
 2. 原因诊断：优先拆成“结果趋势 + 构成拆解 + 关键维度定位 + 必要专项分析 + 结论汇总”，通常不超过 6 个子任务
 3. 维度对比：优先拆成“核心维度排名/贡献 + 必要补充维度 + 结论汇总”，通常不超过 5 个子任务
 """.strip()
@@ -133,9 +142,13 @@ class QueryDecomposer:
         self,
         llm_client: LLMClient | None = None,
         response_generator: Callable[[str, str], str] | None = None,
+        schema_text: str = "",
+        schema_tables: list[dict] | None = None,
     ):
         self.llm = llm_client or LLMClient()
         self.response_generator = response_generator or self._generate_response
+        self.schema_text = schema_text
+        self.schema_tables = schema_tables
 
     def decompose(self, user_question: str) -> dict:
         """将复杂问题拆解为结构化子任务。"""
@@ -143,7 +156,23 @@ class QueryDecomposer:
         if not question:
             raise ValueError("输入问题不能为空")
 
-        system_msg, prompt = build_decomposition_prompt(question)
+        schema_text = self.schema_text
+        schema_tables = self.schema_tables
+        if not schema_text:
+            # 独立调用拆解器时也读取真实结构；API 路径直接传入当前运行环境的结构。
+            from chatbi.bootstrap.runtime_factory import build_database_client
+            from chatbi.infrastructure.database_schema import render_schema
+            if schema_tables is None:
+                db = build_database_client()
+                try:
+                    schema_tables = db.describe_schema()
+                finally:
+                    db.close()
+            schema_text = render_schema(schema_tables)
+        dimensions = build_dimension_catalog(schema_text, schema_tables)
+        if not dimensions:
+            raise ValueError("当前 Schema 没有可识别的分析字段，请提供结构化元数据")
+        system_msg, prompt = build_decomposition_prompt(question, schema_text, dimensions)
         last_error: ValueError | None = None
 
         for attempt in range(2):
@@ -154,7 +183,7 @@ class QueryDecomposer:
 
             try:
                 self._validate_dependencies(plan)
-                self._validate_dimensions(plan)
+                self._validate_dimensions(plan, dimensions)
                 self._validate_plan_complexity(plan)
                 return plan.model_dump()
             except ValueError as exc:
@@ -225,17 +254,17 @@ class QueryDecomposer:
         return plan
 
     @staticmethod
-    def _validate_dimensions(plan: DecompositionPlan) -> None:
+    def _validate_dimensions(plan: DecompositionPlan, dimension_catalog: dict[str, str]) -> None:
         unsupported = sorted(
             {
                 dimension
                 for task in plan.subtasks
                 for dimension in task.dimensions
-                if dimension not in AVAILABLE_DIMENSIONS
+                if dimension not in dimension_catalog
             }
         )
         if unsupported:
-            raise ValueError(f"不支持的分析维度: {', '.join(unsupported)}")
+            raise ValueError(f"不支持的分析维度: {', '.join(unsupported)}；只能填写当前 Schema 的表名.字段名")
 
     @staticmethod
     def _validate_plan_complexity(plan: DecompositionPlan) -> None:

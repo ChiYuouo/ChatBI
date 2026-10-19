@@ -6,7 +6,8 @@ import pytest
 from chatbi.core.security import UserContext
 from chatbi.execution.budget import BudgetExceeded, ExecutionBudget, ExecutionLimits, budgeted_events, request_timeout
 from chatbi.execution.budgeted_llm import BudgetedLLM
-from chatbi.infrastructure.database import DatabaseClient, QueryExecutionError
+from chatbi.infrastructure.database import QueryExecutionError
+from schema_fixtures import FixtureDatabaseClient as DatabaseClient
 from chatbi.infrastructure.llm_client import LLMClient
 from chatbi.services.chatbi_service import ChatBISystem
 from chatbi.text2sql.query_parser import QueryParser
@@ -166,7 +167,7 @@ def test_single_query_does_not_execute_after_model_exhausts_budget(stream):
         def generate_sql_stream(self, *args):
             yield self.generate_sql(*args)
     runtime = SimpleNamespace(source_id="mysql_main", db=db, llm=LLM(), parser=QueryParser(),
-        formatter=ResultFormatter(), indicator_knowledge=None)
+        formatter=ResultFormatter(), indicator_knowledge=None, schema_text="sales_orders(order_id, order_date, region, net_amount)")
     system = ChatBISystem(runtime=runtime, app_config={"features": {}})
     budget = ExecutionBudget(ExecutionLimits(total_timeout_seconds=1), clock=lambda: now[0])
     if stream:

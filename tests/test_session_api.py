@@ -15,7 +15,7 @@ class FakeSessionStore:
         self.deleted = deleted
         self.calls: list[tuple[str, str]] = []
 
-    def delete_session(self, session_id, user_id) -> int:
+    def delete_session(self, session_id, user_id, source_id=None) -> int:
         self.calls.append((session_id, user_id))
         return self.deleted
 

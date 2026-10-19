@@ -556,14 +556,28 @@ if __name__ == "__main__":
 
     from chatbi.infrastructure.llm_client import LLMClient
     from chatbi.text2sql.prompt_builder import build_prompt
+    from chatbi.core.config import APP_CONFIG
+    from chatbi.infrastructure.datasource_store import get_datasource_store
+    from chatbi.bootstrap.runtime_factory import build_database_client
+    from chatbi.infrastructure.database_schema import render_schema
 
     llm = LLMClient()
+    knowledge = get_datasource_store().knowledge(APP_CONFIG["database"]["default_source"])
+    database = build_database_client()
+    try:
+        schema_text = render_schema(database.describe_schema())
+    finally:
+        database.close()
 
     def generate_sql(question: str) -> str:
         system_msg, prompt = build_prompt(
             question,
             use_rules=True,
-            use_guards=True
+            use_guards=True,
+            schema_text=schema_text,
+            rules_text=knowledge.get("business_rules"),
+            guards_text=knowledge.get("error_guards"),
+            examples_text=knowledge.get("few_shot_examples"),
         )
 
         return llm.generate_sql(

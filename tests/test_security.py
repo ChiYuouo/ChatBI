@@ -8,9 +8,8 @@ from fastapi import HTTPException
 from starlette.requests import Request
 
 from chatbi.api.dependencies import _build_user_context
-from chatbi.core.security import QuerySecurityManager, SecurityError, UserContext
-from chatbi.execution.sql_policy import BUSINESS_SCHEMA
-from chatbi.infrastructure.database import DatabaseClient
+from chatbi.core.security import SecurityError, UserContext
+from schema_fixtures import FixtureSecurityManager as QuerySecurityManager, FixtureDatabaseClient as DatabaseClient, TEST_SCHEMA
 from chatbi.services.chatbi_service import ChatBISystem
 
 ADMIN = UserContext("admin", "admin")
@@ -61,7 +60,7 @@ def test_sales_cannot_hide_forbidden_sources_in_aliases_or_scopes(sql):
 @pytest.fixture()
 def business_db():
     conn = sqlite3.connect(":memory:")
-    for table, columns in BUSINESS_SCHEMA.items():
+    for table, columns in TEST_SCHEMA.items():
         conn.execute(f"CREATE TABLE {table} ({', '.join(name + ' TEXT' for name in columns)})")
     conn.executemany("INSERT INTO dim_customers(customer_id, region) VALUES (?, ?)",
                      [("1", "Europe"), ("2", "NorthAmerica"), ("3", "Europe")])

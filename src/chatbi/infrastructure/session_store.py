@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS chat_turn (
     question    TEXT    NOT NULL,
     sql_text    TEXT,
     answer_text TEXT,
+    source_id   TEXT,
     created_at  TEXT    NOT NULL
 );
 
@@ -156,6 +157,11 @@ class SessionStore:
         if "answer_text" not in existing:
             conn.execute("ALTER TABLE chat_turn ADD COLUMN answer_text TEXT")
             logger.info("会话表已迁移：chat_turn 新增 answer_text 列")
+        if "source_id" not in existing:
+            conn.execute("ALTER TABLE chat_turn ADD COLUMN source_id TEXT")
+        # 旧会话只归属于原默认演示源，不推测其属于后来添加的数据源。
+        conn.execute("UPDATE chat_turn SET source_id=? WHERE source_id IS NULL",
+                     (os.getenv("DB_DEFAULT_SOURCE", "mysql_main"),))
 
     def _prune_expired(self, force: bool = False) -> None:
         """删除超过保留期的会话记录；失败只记日志。
@@ -199,6 +205,7 @@ class SessionStore:
         question: str,
         sql: str | None = None,
         answer: str | None = None,
+        source_id: str | None = None,
     ) -> None:
         """追加一轮问答。失败只记日志，不抛出。
 
@@ -216,8 +223,8 @@ class SessionStore:
                         conn.execute(
                             "INSERT INTO chat_turn"
                             " (session_id, user_id, question, sql_text,"
-                            " answer_text, created_at)"
-                            " VALUES (?, ?, ?, ?, ?, ?)",
+                            " answer_text, created_at, source_id)"
+                            " VALUES (?, ?, ?, ?, ?, ?, ?)",
                             (
                                 session_id,
                                 owner,
@@ -225,6 +232,7 @@ class SessionStore:
                                 (sql or "")[:_MAX_SQL_CHARS] or None,
                                 (answer or "")[:_MAX_ANSWER_CHARS] or None,
                                 datetime.now().isoformat(timespec="seconds"),
+                                source_id or os.getenv("DB_DEFAULT_SOURCE", "mysql_main"),
                             ),
                         )
                         # 单会话只保留最近 N 轮，避免长会话把库撑大
@@ -256,6 +264,7 @@ class SessionStore:
         session_id: str | None,
         user_id: str | None,
         limit: int | None = None,
+        source_id: str | None = None,
     ) -> list[ConversationTurn]:
         """取最近 N 轮，按时间正序返回（便于直接渲染）。失败返回空列表。"""
         if not session_id:
@@ -266,9 +275,9 @@ class SessionStore:
             try:
                 rows = conn.execute(
                     "SELECT question, sql_text, answer_text, created_at FROM chat_turn"
-                    " WHERE session_id = ? AND user_id = ?"
+                    " WHERE session_id = ? AND user_id = ? AND source_id = ?"
                     " ORDER BY id DESC LIMIT ?",
-                    (session_id, user_id or "anonymous", resolved_limit),
+                    (session_id, user_id or "anonymous", source_id or os.getenv("DB_DEFAULT_SOURCE", "mysql_main"), resolved_limit),
                 ).fetchall()
             finally:
                 conn.close()
@@ -290,9 +299,10 @@ class SessionStore:
         session_id: str | None,
         user_id: str | None,
         limit: int | None = None,
+        source_id: str | None = None,
     ) -> str:
         """渲染为可直接注入 Prompt 的文本块；无历史时返回空字符串。"""
-        turns = self.recent_turns(session_id, user_id, limit=limit)
+        turns = self.recent_turns(session_id, user_id, limit=limit, source_id=source_id)
         if not turns:
             return ""
 
@@ -307,7 +317,7 @@ class SessionStore:
                 lines.append(f"      分析结论（摘要）：{summary}")
         return "\n".join(lines)
 
-    def list_sessions(self, user_id: str | None) -> list[dict]:
+    def list_sessions(self, user_id: str | None, source_id: str | None = None) -> list[dict]:
         """列出某用户的全部会话（聚合自轮次表），按最后活动倒序。
 
         标题取该会话的第一个问题 —— 这是侧边栏里用户辨认对话的依据。
@@ -329,11 +339,11 @@ class SessionStore:
                               AND t2.user_id = t.user_id
                             ORDER BY t2.id ASC LIMIT 1) AS title
                     FROM chat_turn t
-                    WHERE t.user_id = ?
+                    WHERE t.user_id = ? AND t.source_id = ?
                     GROUP BY t.session_id
                     ORDER BY MAX(t.id) DESC
                     """,
-                    (user_id,),
+                    (user_id, source_id or os.getenv("DB_DEFAULT_SOURCE", "mysql_main")),
                 ).fetchall()
             finally:
                 conn.close()
@@ -351,7 +361,7 @@ class SessionStore:
             for row in rows
         ]
 
-    def get_turns(self, session_id: str | None, user_id: str | None) -> list[ConversationTurn]:
+    def get_turns(self, session_id: str | None, user_id: str | None, source_id: str | None = None) -> list[ConversationTurn]:
         """取某会话的全部轮次（时间正序），用于前端回填历史对话。"""
         if not session_id:
             return []
@@ -360,9 +370,9 @@ class SessionStore:
             try:
                 rows = conn.execute(
                     "SELECT question, sql_text, answer_text, created_at FROM chat_turn"
-                    " WHERE session_id = ? AND user_id = ?"
+                    " WHERE session_id = ? AND user_id = ? AND source_id = ?"
                     " ORDER BY id ASC",
-                    (session_id, user_id or "anonymous"),
+                    (session_id, user_id or "anonymous", source_id or os.getenv("DB_DEFAULT_SOURCE", "mysql_main")),
                 ).fetchall()
             finally:
                 conn.close()
@@ -379,7 +389,7 @@ class SessionStore:
             for row in rows
         ]
 
-    def delete_session(self, session_id: str | None, user_id: str | None) -> int:
+    def delete_session(self, session_id: str | None, user_id: str | None, source_id: str | None = None) -> int:
         """删除某会话在某用户名下的全部记录，返回删除条数。
 
         「新会话」必须调它 —— 只换 session_id 而不删数据，
@@ -394,8 +404,8 @@ class SessionStore:
                 try:
                     with conn:
                         cursor = conn.execute(
-                            "DELETE FROM chat_turn WHERE session_id = ? AND user_id = ?",
-                            (session_id, user_id or "anonymous"),
+                            "DELETE FROM chat_turn WHERE session_id = ? AND user_id = ? AND source_id = ?",
+                            (session_id, user_id or "anonymous", source_id or os.getenv("DB_DEFAULT_SOURCE", "mysql_main")),
                         )
                         deleted = cursor.rowcount
                 finally:

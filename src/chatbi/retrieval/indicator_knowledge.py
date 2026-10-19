@@ -8,15 +8,22 @@
 """
 
 import json
-from typing import Optional
+from pathlib import Path
+
+
+INDICATORS_FILE = Path(__file__).resolve().parents[3] / "indicators_full.json"
 
 
 class IndicatorKnowledge:
     """指标知识模块：加载指标定义、识别问题中的指标、生成指标知识文本"""
 
-    def __init__(self, config_path: str = "indicators_full.json"):
-        with open(config_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+    def __init__(self, config_path: str | Path | None = INDICATORS_FILE):
+        # None 表示当前源没有指标库，避免误用演示源的指标。
+        if config_path is not None:
+            with open(config_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        else:
+            data = {"indicators": []}
         self.indicators = {ind["name"]: ind for ind in data["indicators"]}
         # 构建别名到标准名称的映射
         self.alias_map = {}
@@ -64,17 +71,19 @@ class IndicatorKnowledge:
 
         blocks = ["【指标知识】"]
         injected = set()
-        for name in detected:
-            if name not in injected:
-                blocks.append(self.get_indicator_text(name))
-                injected.add(name)
-            # 注入依赖指标
+
+        def append_indicator(name):
             ind = self.indicators.get(name)
-            if ind and ind.get("depends_on"):
-                for dep in ind["depends_on"]:
-                    if dep not in injected:
-                        blocks.append(self.get_indicator_text(dep))
-                        injected.add(dep)
+            if not ind or name in injected:
+                return
+            # 先标记再递归，兼容多层依赖，也避免错误配置中的循环依赖。
+            injected.add(name)
+            blocks.append(self.get_indicator_text(name))
+            for dependency in ind.get("depends_on", []):
+                append_indicator(dependency)
+
+        for name in detected:
+            append_indicator(name)
         return "\n\n".join(blocks)
 
     def get_indicator_context(self, question: str) -> dict[str, list[str] | str]:

@@ -95,6 +95,129 @@ def revenue_sql(where):
         f"WHERE o.order_status='completed' AND {where}")
 
 
+def test_schema_reads_non_demo_tables_and_changed_columns(mysql_source):
+    """仅在专用临时容器中建表，验证结构没有演示表/字段回退。"""
+    from chatbi.infrastructure.database_schema import render_schema
+    from chatbi.core.security import SecurityError
+    config = {**mysql_source, "user": "root", "password": "temporary-test-admin-42"}
+    db = DatabaseClient(db_config=config, slow_query_threshold_ms=float("inf"))
+    with pymysql.connect(**config) as conn:
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("CREATE TABLE QueryEvents (event_id INT PRIMARY KEY COMMENT '记录编号', label VARCHAR(20) COMMENT '处理标签') COMMENT='结构测试表'")
+                cursor.execute("INSERT INTO QueryEvents VALUES (1,'ok'), (2,'ok')")
+            metadata = db.describe_schema()
+            own = [table for table in metadata if table["table_name"] == "QueryEvents"]
+            assert "处理标签" in render_schema(own)
+            assert "sales_orders" not in render_schema(own)
+            assert db.execute_query("SELECT COUNT(*) AS total FROM QueryEvents", UserContext.demo_admin()).rows == [(2,)]
+            with conn.cursor() as cursor:
+                cursor.execute("ALTER TABLE QueryEvents ADD current_value INT DEFAULT 7 COMMENT '新增字段'")
+            refreshed = db.describe_schema()
+            assert "新增字段" in render_schema([table for table in refreshed if table["table_name"] == "QueryEvents"])
+            assert db.execute_query("SELECT SUM(current_value) FROM QueryEvents", UserContext.demo_admin()).rows == [(Decimal(14),)]
+            with pytest.raises(SecurityError):
+                db.execute_query("SELECT missing_column FROM QueryEvents", UserContext.demo_admin())
+        finally:
+            db.close()
+            with conn.cursor() as cursor:
+                cursor.execute("DROP TABLE IF EXISTS QueryEvents")
+
+
+@pytest.mark.parametrize("source_kind", ["default", "added"])
+@pytest.mark.parametrize("stream", [False, True])
+def test_frontend_knowledge_and_real_schema_reach_query_prompt(client, mysql_source, tmp_path, monkeypatch, source_kind, stream):
+    """真实 HTTP 配置保存 + MySQL 结构/查询；模型只使用本地假实现。"""
+    from copy import deepcopy
+    from cryptography.fernet import Fernet
+    from chatbi.api import routes
+    from chatbi.bootstrap import runtime_factory
+    from chatbi.infrastructure.datasource_store import DataSourceStore
+    from chatbi.services import chatbi_service
+    from chatbi.retrieval import schema_index
+
+    class LocalEmbeddings:
+        def embed_documents(self, texts):
+            return [[1.0, 0.5, 0.25] for _ in texts]
+
+        def embed_query(self, text):
+            return [1.0, 0.5, 0.25]
+
+    monkeypatch.setattr(schema_index, "CHROMA_ROOT", tmp_path / "vectors")
+    monkeypatch.setattr(schema_index, "_get_embeddings", lambda budget=None: LocalEmbeddings())
+
+    store = DataSourceStore(str(tmp_path / "sources.db"))
+    for module in (routes, runtime_factory, chatbi_service):
+        monkeypatch.setattr(module, "get_datasource_store", lambda: store)
+    monkeypatch.setenv("DATASOURCE_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    default_source = routes.APP_CONFIG["database"]["default_source"]
+    source = default_source
+    if source_kind == "added":
+        draft = {key: mysql_source[key] for key in ("host", "port", "database", "user", "password", "charset")}
+        assert client.post("/api/v1/data-sources/test-connection", json=draft).status_code == 200
+        assert store.list(admin=True) == []
+        created = client.post("/api/v1/data-sources", json={"name": "独立集成测试源", **draft})
+        assert created.status_code == 201, created.text
+        source = created.json()["source_id"]
+
+    url = f"/api/v1/data-sources/{source}/knowledge"
+    content = {
+        "business_rule_items": [{"title": "前端业务规则", "content": "按当前结构统计订单"}],
+        "error_guard_items": [{"title": "前端错误防护", "content": "禁止使用不存在的字段"}],
+        "sql_examples": [{"question": "前端 fewshot 问题", "sql": "SELECT COUNT(*) AS probe FROM sales_orders"}],
+    }
+    assert client.put(url, json={"knowledge": content}).status_code == 200
+
+    class LocalLLM:
+        def __init__(self):
+            self.prompts = []
+
+        def generate_sql(self, system_msg, prompt):
+            self.prompts.append(prompt)
+            return "SELECT COUNT(*) AS probe FROM sales_orders"
+
+        def generate_sql_stream(self, system_msg, prompt):
+            yield self.generate_sql(system_msg, prompt)
+
+    llm = LocalLLM()
+    config = deepcopy(routes.APP_CONFIG)
+    config["features"] = {"few_shot": True, "rules": True, "guards": True}
+    config["database"]["sources"][default_source] = {"driver": "mysql", **mysql_source}
+    monkeypatch.setattr(routes, "APP_CONFIG", config)
+
+    def factory(app_config, source_id=None):
+        runtime = runtime_factory.build_runtime(app_config, source_id)
+        runtime.llm.close()
+        runtime.llm = llm
+        return runtime
+
+    system = chatbi_service.ChatBISystem(app_config=config, runtime_factory=factory)
+    monkeypatch.setattr(routes, "system", system)
+    query_url = "/api/v1/query/stream" if stream else "/api/v1/query"
+    payload = {"question": "统计订单数量", "source_id": source, "use_indicator_knowledge": False,
+               "use_indicator_rag": False, "use_schema_linking": True}
+    try:
+        response = client.post(query_url, json=payload)
+        assert response.status_code == 200, response.text
+        if stream:
+            assert "event: result" in response.text and "event: error" not in response.text
+        else:
+            assert response.json()["columns"] == ["probe"]
+        for marker in ("前端业务规则", "前端错误防护", "前端 fewshot 问题", "表：sales_orders"):
+            assert marker in llm.prompts[-1]
+        assert schema_index.schema_index_status(source, store.tables(source))["status"] == "ready"
+        assert "【数据库Schema】\nNone" not in llm.prompts[-1]
+        assert client.put(url, json={"knowledge": {key: [] for key in content}}).status_code == 200
+        cleared = client.post(query_url, json=payload)
+        assert cleared.status_code == 200, cleared.text
+        if stream:
+            assert "event: result" in cleared.text and "event: error" not in cleared.text
+        for marker in ("前端业务规则", "前端错误防护", "前端 fewshot 问题", "【示例】"):
+            assert marker not in llm.prompts[-1]
+    finally:
+        system.close()
+
+
 @pytest.mark.parametrize("cny_rate", [None, 99])
 def test_cny_needs_no_rate_and_gross_profit_uses_cny_income(financial_source, cny_rate):
     config, admin = financial_source

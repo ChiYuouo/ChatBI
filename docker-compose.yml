@@ -29,7 +29,7 @@ services:
       retries: 30
       start_period: 40s
 
-  # ---------- 索引：首次启动或定义/Embedding 配置变更时初始化 ----------
+  # ---------- 指标索引；各数据源的 Schema 索引在首次查询时自动准备 ----------
   index-init:
     build:
       context: .
@@ -42,7 +42,6 @@ services:
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-v3}
       LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-30}
-      FEATURE_SCHEMA_LINKING: ${FEATURE_SCHEMA_LINKING:-false}
       FEATURE_INDICATOR_RAG: ${FEATURE_INDICATOR_RAG:-false}
     volumes:
       - chatbi-index-data:/app/chroma_db
@@ -89,6 +88,8 @@ services:
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-v3}
       # 登录 token 签名密钥；留空则后端退化为随机密钥（重启后需重新登录）
       JWT_SECRET: ${JWT_SECRET:-}
+      DATASOURCE_ENCRYPTION_KEY: ${DATASOURCE_ENCRYPTION_KEY:-}
+      DATASOURCES_DB_PATH: ${DATASOURCES_DB_PATH:-data/datasources.db}
       # 会话历史参数（见 session_store.py）
       SESSION_HISTORY_TURNS: ${SESSION_HISTORY_TURNS:-8}
       SESSION_RETENTION_DAYS: ${SESSION_RETENTION_DAYS:-7}
@@ -97,8 +98,8 @@ services:
       FEATURE_FEW_SHOT: ${FEATURE_FEW_SHOT:-false}
       FEATURE_RULES: ${FEATURE_RULES:-false}
       FEATURE_GUARDS: ${FEATURE_GUARDS:-false}
-      FEATURE_INDICATOR_KNOWLEDGE: ${FEATURE_INDICATOR_KNOWLEDGE:-false}
       FEATURE_SCHEMA_LINKING: ${FEATURE_SCHEMA_LINKING:-false}
+      FEATURE_INDICATOR_KNOWLEDGE: ${FEATURE_INDICATOR_KNOWLEDGE:-false}
       FEATURE_INDICATOR_RAG: ${FEATURE_INDICATOR_RAG:-false}
       FEATURE_QUERY_REWRITE: ${FEATURE_QUERY_REWRITE:-false}
       # 前端已经走 Nginx 同源反代，这里只是兜底放开直连调试

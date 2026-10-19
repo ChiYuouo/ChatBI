@@ -16,10 +16,11 @@ def test_build_runtime_uses_requested_database_source(monkeypatch):
         pass
 
     class FakeIndicatorKnowledge:
-        pass
+        def __init__(self, config_path=None):
+            pass
 
     class FakeDatabaseClient:
-        def __init__(self, db_config=None, source_id=None, runtime_config=None):
+        def __init__(self, db_config=None, source_id=None, runtime_config=None, schema=None):
             captured["db_config"] = db_config
             captured["source_id"] = source_id
 
@@ -86,7 +87,7 @@ def test_chatbi_system_run_uses_runtime_factory_for_source_id():
             db=FakeDB(),
             formatter=FakeFormatter(),
             indicator_knowledge=FakeIndicatorKnowledge(),
-        )
+        schema_text="sales_orders(order_id, order_date, region, net_amount)")
 
     system = ChatBISystem(app_config={"features": {}}, runtime_factory=fake_runtime_factory)
 
@@ -108,7 +109,7 @@ def test_chatbi_system_reuses_source_runtime_and_closes_all_pools():
         source = source_id or "default"
         created.append(source)
         return SimpleNamespace(source_id=source, parser=None, formatter=None, indicator_knowledge=None,
-            db=SimpleNamespace(close=lambda: closed.append(source)), llm=SimpleNamespace())
+            db=SimpleNamespace(close=lambda: closed.append(source)), llm=SimpleNamespace(), schema_text="sales_orders(order_id, order_date, region, net_amount)")
     system = ChatBISystem(app_config={"features": {}}, runtime_factory=factory)
     assert system._get_runtime("another") is system._get_runtime("another")
     assert created == ["default", "another"]

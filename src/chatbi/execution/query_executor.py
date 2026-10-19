@@ -6,7 +6,7 @@ import sqlglot
 from sqlglot import exp
 
 from chatbi.contracts.execution import ExecutionContext, QueryExecutionResult
-from chatbi.core.security import QuerySecurityManager, SecurityError, UserContext
+from chatbi.core.security import QuerySecurityManager, SchemaRequiredError, SecurityError, UserContext
 from chatbi.execution.budget import ExecutionBudget
 from chatbi.infrastructure.audit_store import record_event, sql_digest
 
@@ -30,8 +30,16 @@ class QueryExecutor:
         audit = {"trace_id": context.trace_id, "user_id": context.user_id,
                  "role": context.role, "source_id": context.source_id}
         try:
-            secured_sql = self.security.secure_sql(sql, context.to_user())
             budget = budget or ExecutionBudget(self.database.limits)
+            budget.remaining()
+            try:
+                secured_sql = self.security.secure_sql(sql, context.to_user(), schema=getattr(self.database, "schema", None))
+            except SchemaRequiredError:
+                # 直接调用 DatabaseClient 时也必须读取真实结构，不能回退演示表。
+                tables = self.database.describe_schema(budget)
+                schema = {table["table_name"]: {column["name"]: column["type"] for column in table["columns"]}
+                          for table in tables}
+                secured_sql = self.security.secure_sql(sql, context.to_user(), schema=schema)
             budget.remaining()
             tree = sqlglot.parse_one(secured_sql, read="mysql")
             maximum = min(self.database.limits.max_rows, budget.limits.max_rows) + 1

@@ -45,10 +45,10 @@ class FakeLLM:
             '"subtasks": ['
             '{"task_id": "task_1", "task_name": "利润趋势", "task_type": "trend", '
             '"description": "按月看利润变化", "depends_on": [], '
-            '"dimensions": ["月份"], "metrics": ["利润"]}, '
+            '"dimensions": ["sales_orders.order_date"], "metrics": ["利润"]}, '
             '{"task_id": "task_2", "task_name": "区域拆解", "task_type": "dimension", '
             '"description": "按区域看贡献", "depends_on": ["task_1"], '
-            '"dimensions": ["区域"], "metrics": ["利润"]}'
+            '"dimensions": ["sales_orders.region"], "metrics": ["利润"]}'
             "]}"
         )
 
@@ -82,7 +82,7 @@ def build_fake_runtime_factory(llm=None):
             db=FakeDB(),
             formatter=FakeFormatter(),
             indicator_knowledge=None,
-        )
+        schema_text="sales_orders(order_id, order_date, region, net_amount)")
 
     return factory
 

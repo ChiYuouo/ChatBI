@@ -14,6 +14,7 @@ _test_data = tempfile.TemporaryDirectory(prefix="chatbi-tests-")
 os.environ["SESSION_DB_PATH"] = str(Path(_test_data.name) / "sessions.db")
 os.environ["USERS_DB_PATH"] = str(Path(_test_data.name) / "users.db")
 os.environ["AUDIT_DB_PATH"] = str(Path(_test_data.name) / "audit.db")
+os.environ["DATASOURCES_DB_PATH"] = str(Path(_test_data.name) / "datasources.db")
 for _feature in ("FEW_SHOT", "RULES", "GUARDS", "INDICATOR_KNOWLEDGE", "SCHEMA_LINKING", "INDICATOR_RAG"):
     os.environ[f"FEATURE_{_feature}"] = "false"
 os.environ["FEATURE_QUERY_REWRITE"] = "true"

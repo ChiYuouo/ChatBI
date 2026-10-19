@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from datetime import date, datetime
 from types import SimpleNamespace
+from copy import copy
 from threading import Lock
 from typing import Any, Generator
 
@@ -35,6 +36,7 @@ from chatbi.retrieval.index_manager import IndexNotReady, require_indexes
 from chatbi.execution.budget import BudgetExceeded, ExecutionBudget, ExecutionLimits, bind_budget, budgeted_events
 from chatbi.execution.budgeted_llm import BudgetedLLM
 from chatbi.infrastructure.session_store import SessionStore
+from chatbi.infrastructure.datasource_store import get_datasource_store
 from chatbi.retrieval.indicator_knowledge import IndicatorKnowledge
 from chatbi.text2sql.prompt_builder import build_prompt
 from chatbi.text2sql.query_rewriter import QueryRewriter, needs_history_context
@@ -65,6 +67,7 @@ class ChatBISystem:
     ):
         self._runtime_lock = Lock()
         self._source_runtimes = {}
+        self._runtime_signatures = {}
         self.security = QuerySecurityManager()
         self.app_config = app_config or APP_CONFIG
         self.runtime_factory = runtime_factory
@@ -79,6 +82,7 @@ class ChatBISystem:
         # 默认构造的改写器没有文本生成器，需要在请求时注入当前 runtime 的 LLM；
         # 外部注入的改写器（例如测试用的假实现）则必须原样保留。
         self._rewriter_needs_llm = query_rewriter is None
+        self._runtime_signatures[self.runtime.source_id] = self._runtime_signature(self.runtime.source_id)
 
     @property
     def session_store(self) -> SessionStore:
@@ -106,19 +110,35 @@ class ChatBISystem:
         self.indicator_knowledge = runtime.indicator_knowledge
 
     def _get_runtime(self, source_id: str | None = None):
-        if source_id is None or source_id == self.runtime.source_id:
-            return SimpleNamespace(
-                source_id=self.runtime.source_id,
-                parser=self.parser,
-                llm=self.llm,
-                db=self.db,
-                formatter=self.formatter,
-                indicator_knowledge=self.indicator_knowledge,
-            )
+        resolved_id = source_id or self.runtime.source_id
         with self._runtime_lock:
-            if source_id not in self._source_runtimes:
-                self._source_runtimes[source_id] = self.runtime_factory(self.app_config, source_id=source_id)
-            return self._source_runtimes[source_id]
+            signature = self._runtime_signature(resolved_id)
+            if resolved_id == self.runtime.source_id:
+                if self._runtime_signatures.get(resolved_id) != signature:
+                    old = self.runtime
+                    self.rebind_runtime(self.runtime_factory(self.app_config, source_id=resolved_id))
+                    self._runtime_signatures[resolved_id] = signature
+                    old.db.close()
+                # 保留原有可注入的 parser/llm/db 等公开属性，供旧调用方复用。
+                runtime = copy(self.runtime)
+                for name in ("parser", "llm", "db", "formatter", "indicator_knowledge"):
+                    setattr(runtime, name, getattr(self, name))
+                return runtime
+            cached = self._source_runtimes.get(resolved_id)
+            if cached is None or self._runtime_signatures.get(resolved_id) != signature:
+                if cached is not None:
+                    cached.db.close()
+                cached = self.runtime_factory(self.app_config, source_id=resolved_id)
+                self._source_runtimes[resolved_id] = cached
+                self._runtime_signatures[resolved_id] = signature
+            return cached
+
+    @staticmethod
+    def _runtime_signature(source_id: str) -> str:
+        store = get_datasource_store()
+        source = store.get(source_id)
+        state = {"source": source, "knowledge": store.knowledge(source_id)}
+        return json.dumps(state, sort_keys=True, ensure_ascii=False, default=str)
 
     def close(self) -> None:
         with self._runtime_lock:
@@ -144,6 +164,8 @@ class ChatBISystem:
             return {"success": False, "error": str(exc), "error_type": "database_budget_exceeded"}
         except IndexNotReady as exc:
             return {"success": False, "error": str(exc), "error_type": "retrieval_not_ready"}
+        except QueryExecutionError as exc:
+            return {"success": False, "error": str(exc), "error_type": f"database_{exc.error_type}"}
 
     def run_stream_events(self, *args, execution_budget: ExecutionBudget | None = None, **kwargs):
         budget = execution_budget or self._new_budget()
@@ -154,6 +176,8 @@ class ChatBISystem:
             yield "error", {"error": str(exc), "error_type": "database_budget_exceeded"}
         except IndexNotReady as exc:
             yield "error", {"error": str(exc), "error_type": "retrieval_not_ready"}
+        except QueryExecutionError as exc:
+            yield "error", {"error": str(exc), "error_type": f"database_{exc.error_type}"}
 
     def _resolve_feature_options(self, overrides: dict[str, bool | None]) -> dict[str, bool]:
         feature_defaults = self.app_config.get("features", {})
@@ -218,7 +242,9 @@ class ChatBISystem:
         base_runtime = self._get_runtime(source_id)
         runtime = SimpleNamespace(source_id=base_runtime.source_id, parser=base_runtime.parser,
             db=base_runtime.db, llm=BudgetedLLM(base_runtime.llm, execution_budget),
-            formatter=base_runtime.formatter, indicator_knowledge=base_runtime.indicator_knowledge)
+            formatter=base_runtime.formatter, indicator_knowledge=base_runtime.indicator_knowledge,
+            schema_text=getattr(base_runtime, "schema_text", None),
+            knowledge_config=getattr(base_runtime, "knowledge_config", {}) or {})
         options = self._resolve_feature_options(
             {
                 "use_few_shot": use_few_shot,
@@ -231,11 +257,21 @@ class ChatBISystem:
             }
         )
 
-        require_indexes({"schema_linking": options["use_schema_linking"], "indicator_rag": options["use_indicator_rag"]})
+        # 环境变量决定默认开关；启用后仍必须有当前源已保存的内容。
+        for option, field in (
+            ("use_few_shot", "few_shot_examples"),
+            ("use_rules", "business_rules"),
+            ("use_guards", "error_guards"),
+        ):
+            options[option] = options[option] and bool(runtime.knowledge_config.get(field, "").strip())
+        default_source = self.app_config.get("database", {}).get("default_source", self.runtime.source_id)
+        if runtime.source_id != default_source:
+            options.update(use_indicator_knowledge=False, use_indicator_rag=False)
+
+        require_indexes({"indicator_rag": options["use_indicator_rag"]})
         parsed = runtime.parser.parse(user_question)
         if not runtime.parser.validate(parsed):
             return None
-
         # 多轮上下文：只有传了 session_id 才读历史。
         # 未传时不触碰会话存储，行为与单轮查询完全一致。
         history = ""
@@ -243,6 +279,7 @@ class ChatBISystem:
             history = self.session_store.render_history(
                 session_id,
                 user_context.user_id,
+                source_id=base_runtime.source_id,
             )
 
         # 完整问题使用自身条件；只有追问才把历史交给改写器和 SQL 生成器。
@@ -268,6 +305,20 @@ class ChatBISystem:
             indicator_knowledge=runtime.indicator_knowledge,
         )
 
+        load_schema = getattr(base_runtime, "get_schema_text", None)
+        if callable(load_schema):
+            schema_options = {}
+            if options["use_schema_linking"]:
+                # 先识别指标，再筛选结构，指标公式与启用的强制规则中的引用不会被裁掉。
+                required = [indicator_block]
+                if options["use_rules"]:
+                    required.append(runtime.knowledge_config.get("business_rules", ""))
+                if options["use_guards"]:
+                    required.append(runtime.knowledge_config.get("error_guards", ""))
+                schema_options = {"question": rewritten_question, "use_schema_linking": True,
+                                  "required_context": "\n".join(text for text in required if text)}
+            runtime.schema_text = load_schema(execution_budget, user_context, **schema_options)
+
         execution_budget.remaining()
         system_msg, prompt = build_prompt(
             rewritten_question,
@@ -275,8 +326,11 @@ class ChatBISystem:
             use_rules=options["use_rules"],
             use_guards=options["use_guards"],
             indicator_knowledge=indicator_block,
-            use_schema_linking=options["use_schema_linking"],
             history=context_history,
+            schema_text=runtime.schema_text,
+            rules_text=runtime.knowledge_config.get("business_rules"),
+            guards_text=runtime.knowledge_config.get("error_guards"),
+            examples_text=runtime.knowledge_config.get("few_shot_examples"),
         )
         execution_budget.remaining()
         return _PreparedQuery(
@@ -313,7 +367,7 @@ class ChatBISystem:
             use_rules: 是否启用业务规则
             use_guards: 是否启用错误防护
             use_indicator_knowledge: 是否启用指标知识注入（关键词匹配）
-            use_schema_linking: 是否启用 Schema Linking 动态注入
+            use_schema_linking: 是否基于当前数据源的真实结构检索相关表和字段
             use_indicator_rag: 是否启用指标 RAG 语义检索（替代关键词匹配）
             security_context: 当前请求的权限上下文
 
@@ -398,6 +452,7 @@ class ChatBISystem:
                     user_id=user_context.user_id,
                     question=user_question,
                     sql=sql,
+                    source_id=runtime.source_id,
                 )
             return {
                 "success": True,
@@ -525,7 +580,7 @@ class ChatBISystem:
             use_rules: 是否启用业务规则
             use_guards: 是否启用错误防护
             use_indicator_knowledge: 是否启用指标知识注入（关键词匹配）
-            use_schema_linking: 是否启用 Schema Linking 动态注入
+            use_schema_linking: 是否基于当前数据源的真实结构检索相关表和字段
             use_indicator_rag: 是否启用指标 RAG 语义检索
             security_context: 当前请求的权限上下文
 
@@ -662,6 +717,7 @@ class ChatBISystem:
                     user_id=user_context.user_id,
                     question=user_question,
                     sql=sql,
+                    source_id=runtime.source_id,
                 )
             yield "result", {
                 "columns": columns,

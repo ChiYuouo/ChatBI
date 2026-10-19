@@ -21,7 +21,7 @@ class QueryRequest(BaseModel):
     use_rules: bool | None = Field(default=None, description="是否启用业务规则约束")
     use_guards: bool | None = Field(default=None, description="是否启用错误防护")
     use_indicator_knowledge: bool | None = Field(default=None, description="是否注入指标知识")
-    use_schema_linking: bool | None = Field(default=None, description="是否启用 Schema Linking")
+    use_schema_linking: bool | None = Field(default=None, description="是否检索相关表和字段；不传时使用 FEATURE_SCHEMA_LINKING")
     use_indicator_rag: bool | None = Field(default=None, description="是否启用指标 RAG")
     use_query_rewrite: bool | None = Field(
         default=None,
@@ -55,7 +55,7 @@ class AnalyzeRequest(BaseModel):
         description="限制实际执行的子步骤数量，便于控制耗时；未传时执行全部步骤",
     )
     use_indicator_knowledge: bool | None = Field(default=None, description="是否注入指标知识")
-    use_schema_linking: bool | None = Field(default=None, description="是否启用 Schema Linking")
+    use_schema_linking: bool | None = Field(default=None, description="是否检索相关表和字段；不传时使用 FEATURE_SCHEMA_LINKING")
     use_indicator_rag: bool | None = Field(default=None, description="是否启用指标 RAG")
     source_id: str | None = Field(default=None, description="数据源标识；未传时使用系统默认数据源")
     # 与 QueryRequest 相同：身份只来自 token，不接受请求体自报
@@ -80,6 +80,23 @@ class AuthorizeUserRequest(BaseModel):
 
     role: str = Field(..., description="pending、admin、finance 或 sales")
     region: str | None = Field(default=None, description="销售角色的区域")
+
+
+class DataSourceConnectionRequest(BaseModel):
+    host: str = Field(..., min_length=1, max_length=255)
+    port: int = Field(default=3306, ge=1, le=65535)
+    database: str = Field(..., min_length=1, max_length=128)
+    user: str = Field(..., min_length=1, max_length=128)
+    password: str = Field(..., min_length=1, max_length=512)
+    charset: str = Field(default="utf8mb4", max_length=32)
+
+
+class DataSourceCreateRequest(DataSourceConnectionRequest):
+    name: str = Field(..., min_length=1, max_length=80)
+
+
+class DataSourceKnowledgeRequest(BaseModel):
+    knowledge: dict[str, Any]
 
 
 class HealthResponse(BaseModel):

@@ -55,6 +55,7 @@ def test_sql_execution_events_keep_request_trace(tmp_path, monkeypatch):
     class Database:
         source_id = "mysql_main"
         limits = ExecutionLimits()
+        schema = {"sales_orders": {"order_id": "int"}}
 
         def _execute_secured(self, original, secured, context, budget):
             assert context.trace_id == "b" * 32

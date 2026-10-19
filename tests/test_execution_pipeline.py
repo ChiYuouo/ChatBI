@@ -9,7 +9,8 @@ import sqlglot
 
 from chatbi.analysis.agent_planner import ExecutionPlan, PlanStep, StepExecutor
 from chatbi.core.security import UserContext
-from chatbi.infrastructure.database import DatabaseClient, QueryExecutionError
+from chatbi.infrastructure.database import QueryExecutionError
+from schema_fixtures import FixtureDatabaseClient as DatabaseClient
 from chatbi.services.chatbi_service import ChatBISystem
 from chatbi.text2sql.query_parser import QueryParser
 from chatbi.text2sql.result_formatter import ResultFormatter
@@ -84,7 +85,7 @@ class LLM:
 
 def build_system(db, queries):
     return ChatBISystem(runtime=SimpleNamespace(source_id=db.source_id, db=db,
-        llm=LLM(queries), parser=QueryParser(), formatter=ResultFormatter(), indicator_knowledge=None),
+        llm=LLM(queries), parser=QueryParser(), formatter=ResultFormatter(), indicator_knowledge=None, schema_text="sales_orders(order_id, order_date, region, net_amount)"),
         app_config={"features": {}})
 
 

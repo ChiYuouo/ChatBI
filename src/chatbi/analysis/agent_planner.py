@@ -347,11 +347,7 @@ class StepExecutor:
         execution_budget: ExecutionBudget | None = None,
     ):
         self.system = chatbi_system
-        self.chatbi_run_options = chatbi_run_options or {
-            "use_schema_linking": True,
-            "use_indicator_rag": True,
-            "use_indicator_knowledge": True,
-        }
+        self.chatbi_run_options = dict(chatbi_run_options or {})
         # 归因链路的子步骤必须以发起请求的用户身份执行。
         # 缺身份由查询入口拒绝；修复重试始终保持同一请求身份。
         self._provided_budget = execution_budget is not None

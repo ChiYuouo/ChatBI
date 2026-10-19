@@ -79,7 +79,7 @@ def build_runtime(llm=None):
         db=FakeDB(),
         formatter=FakeFormatter(),
         indicator_knowledge=None,
-    )
+    schema_text="sales_orders(order_id, order_date, region, net_amount)")
 
 
 def build_system(llm=None, with_store: bool = True, query_rewriter=None):
@@ -280,7 +280,7 @@ def test_new_session_stops_using_previous_history():
 
 
 def test_prompt_includes_history_block():
-    _, prompt = build_prompt("那2月呢？", history="第1轮 用户问：利润趋势\n      生成SQL：SELECT 1")
+    _, prompt = build_prompt("那2月呢？", schema_text="sales_orders(order_date)", history="第1轮 用户问：利润趋势\n      生成SQL：SELECT 1")
 
     assert "【对话历史】" in prompt
     assert "第1轮 用户问：利润趋势" in prompt
@@ -289,7 +289,7 @@ def test_prompt_includes_history_block():
 
 
 def test_prompt_without_history_has_no_block():
-    _, prompt = build_prompt("各区域收入是多少")
+    _, prompt = build_prompt("各区域收入是多少", schema_text="sales_orders(region, net_amount)")
 
     assert "【对话历史】" not in prompt
     assert "【用户问题】" in prompt

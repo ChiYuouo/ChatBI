@@ -228,7 +228,7 @@ def test_identity_comes_from_token_not_body(anonymous_client, monkeypatch):
     captured: dict[str, str] = {}
 
     class FakeStore:
-        def delete_session(self, session_id, user_id):
+        def delete_session(self, session_id, user_id, source_id=None):
             captured["user_id"] = user_id
             return 0
 

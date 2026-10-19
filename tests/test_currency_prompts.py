@@ -14,7 +14,8 @@ def test_prompt_and_all_revenue_templates_share_cny_and_foreign_currency_convent
         if sql.startswith('SELECT') and 'exchange_rates' in sql:
             assert "CASE WHEN o.currency = 'CNY' THEN 1 ELSE r.rate_to_cny END" in sql
             assert 'LEFT JOIN exchange_rates' in sql
-    _, prompt = build_prompt('毛利与经营利润', use_rules=True, use_guards=True)
+    _, prompt = build_prompt('毛利与经营利润', use_rules=True, use_guards=True, schema_text='sales_orders(net_amount)',
+                             rules_text='毛利 = 人民币收入 - 估算销售成本；订单与费用在同一数据库，按同一期间分别聚合后相减')
     assert '人民币收入 - 估算销售成本' in prompt
     assert '毛利 = net_amount -' not in prompt
     assert '订单与费用在同一数据库' in prompt

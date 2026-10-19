@@ -1,302 +1,52 @@
-"""
-Prompt 构造模块
-负责将 Schema 信息、Few-shot 示例和用户问题组装为完整 Prompt。
-Schema 和示例在此集中维护，便于后续动态扩展。
-RULES（业务规则注入层）与 ERROR_GUARDS（错误防护层）在此定义，
-通过 build_prompt 的可选参数控制是否注入，实现 Prompt 策略的灵活切换。
-"""
-from chatbi.retrieval.indicator_knowledge import IndicatorKnowledge
+"""组装 SQL 生成提示词；规则、防护和示例仅来自当前数据源已保存的配置。"""
 
+SYSTEM_PROMPT = "你是一个专业的 SQL 生成助手，擅长根据业务问题生成标准 MySQL 查询语句。"
 
+# SQL 执行能力属于固定技术约束，业务口径由用户配置。
+QUERY_REQUIREMENTS = (
+    "只输出 SQL 语句，不需要解释",
+    "只使用执行层支持的 MySQL 查询语法；合并结果集使用 LEFT JOIN、UNION 与 COALESCE",
+    "确保字段名和表名与 Schema 一致",
+    "如果涉及多表查询，使用 JOIN 连接",
+    "SQL 必须完整闭合，CTE、SELECT、GROUP BY、ORDER BY 不得省略，不要输出截断的半句 SQL",
+    "执行层只支持普通聚合、INNER/LEFT JOIN、非相关子查询、非递归 CTE 和 UNION；"
+    "不要生成窗口函数、相关子查询或 RIGHT/FULL/CROSS JOIN。多表查询的字段应写明表别名；"
+    "优先使用 COUNT、SUM、AVG、MIN、MAX、ROUND、COALESCE、IFNULL、NULLIF、"
+    "DATE_FORMAT、DATE_SUB、CURDATE 等已支持的函数；自定义顺序可用 FIELD(列, 常量...)",
+)
 
-# ==================== Schema 定义 ====================
-
-SCHEMA = """
-表：dim_customers（客户维度表）
-
-- customer_id INT 主键
-- customer_name VARCHAR(100) 客户名称
-- customer_type VARCHAR(50) 客户类型：OEM 整车厂 / 储能集成商 / 电网集团 /
-  工商业用户 / 换电运营商 / 经销商
-- industry VARCHAR(50) 客户行业：交通 / 能源 / 工业 / 特种交通
-- country VARCHAR(50) 具体国家，如 Germany
-- region VARCHAR(50) 大区，如 欧洲、北美
-
-表：dim_products（产品维度表）
-
-- product_id INT 主键
-- product_name VARCHAR(100) 产品名称
-- product_line VARCHAR(50) 产品线：动力电池-乘用车 / 动力电池-商用车 / 储能
-  系统-电网级 / 储能系统-工商业 / 电池材料与回收
-- category VARCHAR(50) 产品分类：高能量密度型 / 超快充型 / 混动专用型 / 低温
-  适配型 / 商用车标准型 / 电网级储能型 / 工商业储能型
-- tech_route VARCHAR(50) 技术路线：三元锂 / 磷酸铁锂 / 钠离子 / 固态电池
-- standard_cost DECIMAL(10,2) 标准成本
-- material_cost DECIMAL(10,2) 材料成本
-- labor_cost DECIMAL(10,2) 人工成本
-
-表：sales_orders（销售订单表）
-
-- order_id BIGINT 主键
-- order_no VARCHAR(50) 订单编号
-- customer_id INT 外键 → dim_customers.customer_id
-- product_id INT 外键 → dim_products.product_id
-- region VARCHAR(50) 销售区域
-- order_date DATE 订单日期
-- order_status VARCHAR(20) 订单状态：completed / cancelled / pending
-- quantity DECIMAL(10,2) 数量（MWh 或套数）
-- unit_price DECIMAL(10,2) 单价（每 MWh 或每套价格，不含税）
-- discount_amount DECIMAL(10,2) 折扣金额
-- gross_amount DECIMAL(12,2) 含税总额
-- net_amount DECIMAL(12,2) 不含税收入（财务口径的销售额）
-- currency VARCHAR(10) 币种
-
-表：exchange_rates（汇率表）
-
-- rate_date DATE 日期
-- currency VARCHAR(10) 币种
-- rate_to_cny DECIMAL(10,4) 兑人民币汇率
-
-表：finance_expenses（费用表）
-
-- expense_id BIGINT 主键
-- expense_date DATE 费用日期
-- department VARCHAR(50) 部门
-- rd_expense DECIMAL(12,2) 研发费用（新能源企业研发投入大）
-- selling_expense DECIMAL(12,2) 销售费用
-- admin_expense DECIMAL(12,2) 管理费用
-- finance_expense DECIMAL(12,2) 财务费用
-- marketing_expense DECIMAL(12,2) 市场费用（属于销售费用子项）
-- logistics_expense DECIMAL(12,2) 物流费用
-- warranty_expense DECIMAL(12,2) 质保费用
-"""
-
-
-# ==================== Few-shot 示例 ====================
-
-FEW_SHOT_EXAMPLES = """
-示例 1：
-问题：查询已完成订单的总数量
-SQL：SELECT COUNT(*) FROM sales_orders WHERE order_status = 'completed';
-
-示例 2：
-问题：按客户类型统计订单数量
-SQL：SELECT c.customer_type, COUNT(*) AS order_count FROM
-sales_orders o JOIN dim_customers c ON o.customer_id = c.customer_id
-WHERE o.order_status = 'completed' GROUP BY c.customer_type;
-
-示例 3：
-问题：查询 2026 年第一季度的总费用
-SQL：SELECT SUM(rd_expense + selling_expense + admin_expense +
-finance_expense) AS total_expense FROM finance_expenses WHERE
-expense_date >= '2026-01-01' AND expense_date < '2026-04-01';
-
-
-示例4：
-问题：查看最近三个月各月销售收入
-SQL：SELECT
-    DATE_FORMAT(o.order_date, '%Y-%m-01') AS month,
-    SUM(o.net_amount * CASE WHEN o.currency = 'CNY' THEN 1 ELSE r.rate_to_cny END) AS revenue_cny
-FROM sales_orders o
-LEFT JOIN exchange_rates r
-  ON o.order_date = r.rate_date
- AND o.currency = r.currency
-WHERE o.order_status = 'completed'
-  AND o.order_date >= DATE_SUB(CURDATE(), INTERVAL 3 MONTH)
-  AND o.order_date < CURDATE() + INTERVAL 1 DAY
-GROUP BY DATE_FORMAT(o.order_date, '%Y-%m-01')
-ORDER BY month;
-
-示例5：
-问题：对比每月毛利与当月费用（两个来源按月对齐）
-SQL：SELECT
-    COALESCE(g.month, e.month) AS month,
-    COALESCE(g.gross_profit, 0) AS gross_profit,
-    COALESCE(e.total_expense, 0) AS total_expense
-FROM (
-    SELECT DATE_FORMAT(o.order_date, '%Y-%m-01') AS month,
-           SUM(o.net_amount * CASE WHEN o.currency = 'CNY' THEN 1 ELSE r.rate_to_cny END)
-             - SUM((p.material_cost + p.labor_cost) * o.quantity) AS gross_profit
-    FROM sales_orders o
-    JOIN dim_products p ON o.product_id = p.product_id
-    LEFT JOIN exchange_rates r ON o.order_date = r.rate_date AND o.currency = r.currency
-    WHERE o.order_status = 'completed'
-    GROUP BY DATE_FORMAT(o.order_date, '%Y-%m-01')
-) g
-LEFT JOIN (
-    SELECT DATE_FORMAT(expense_date, '%Y-%m-01') AS month,
-           SUM(rd_expense + selling_expense + admin_expense + finance_expense) AS total_expense
-    FROM finance_expenses
-    GROUP BY DATE_FORMAT(expense_date, '%Y-%m-01')
-) e ON g.month = e.month
-ORDER BY month;
-"""
-
-
-# ==================== 规则注入层 ====================
-
-RULES = """
-【关键业务规则】
-
-1. 收入口径："销售额""收入"均指不含税收入，统一使用
-   sales_orders.net_amount，禁止使用 gross_amount
-2. 成本口径：使用产品当前人民币材料成本和人工成本估算销售成本，
-   公式为 (dim_products.material_cost + dim_products.labor_cost) * quantity；没有历史成本快照
-3. 订单统计范围：统计收入、订单量、客单价等指标时，必须过滤 order_status =
-   'completed'，排除 cancelled 和 pending
-4. 汇率转换：涉及多币种收入汇总时，必须通过 order_date 和 currency 关联
-   exchange_rates 表（LEFT JOIN），人民币使用 1，外币使用 rate_to_cny。
-   使用 CASE WHEN o.currency = 'CNY' THEN 1 ELSE r.rate_to_cny END；
-   禁止用 COALESCE(rate_to_cny, 0/1) 或汇率字段过滤掩盖缺失
-5. 时间范围："最近 N 个月"使用 DATE_SUB(CURDATE(), INTERVAL N MONTH)
-   作为起始边界；"本月"指当月 1 日至当前日期
-6. 费用层级：selling_expense 是销售费用总项，包含 marketing_expense、
-   logistics_expense、warranty_expense，汇总时不得重复计算
-7. 毛利计算：毛利 = 人民币收入 - 估算销售成本；收入先换汇再减人民币成本
-   简化经营利润 = 毛利 - 期间费用，不等同于会计净利润或完整营业利润。
-   订单与费用在同一数据库，必须分别聚合后按同一期间相减，可使用子查询或 CTE；
-   禁止直接关联两张事实表的明细，否则会重复计算。没有费用分摊时不计算产品线/区域经营利润
-8. 不要引用 Schema 中不存在的字段，例如 channel
-"""
-
-
-# ==================== 错误防护层 ====================
-
-ERROR_GUARDS = """
-【常见错误防护】
-
-- 字段选择：确认金额字段是 net_amount（不含税）还是 gross_amount（含
-  税），除非明确要求"含税"，否则一律用 net_amount
-- Join 遗漏：只要查询涉及"收入"且存在 currency 字段，必须关联
-  exchange_rates 表（LEFT JOIN）做汇率转换；人民币使用 1，外币必须使用有效汇率，不能默认补 0 或 1
-- 过滤遗漏：所有收入类统计必须包含 WHERE order_status = 'completed'
-- 时间边界：使用 >= 和 < 组合表示闭开区间；“最近N个月”按 DATE_SUB(CURDATE(), INTERVAL N MONTH) 处理
-- 聚合维度（重要）：MySQL 8 默认启用 ONLY_FULL_GROUP_BY，SELECT / HAVING / ORDER BY
-  中的每一列必须满足三者之一：①出现在 GROUP BY 中；②被聚合函数包裹（SUM/COUNT/MAX/MIN/AVG）；
-  ③与某个 GROUP BY 列有函数依赖（如该列是主键）。
-  特别注意：COALESCE / IFNULL / CASE / ROUND / DATE_FORMAT 等**都是标量函数，不算聚合**，
-  套一层并不会让非聚合列变合法。例如
-  `SUM(a) - COALESCE(f.total, 0)` 会报 1055，必须写成 `SUM(a) - COALESCE(MAX(f.total), 0)`。
-  若某个派生表已按同一个月度分组（每期仅一行），用 MAX() 或 SUM() 包裹即可，语义不变。
-- 方言合规（重要）：只能使用 MySQL 8 实际支持的语法。MySQL **不支持**
-  FULL OUTER JOIN（含 FULL JOIN）、EXCEPT、INTERSECT —— 这些在其他数据库合法，
-  在 MySQL 会直接报 1064 语法错误。需要按月/维度对齐合并两个结果集并保留
-  两侧所有行时，用以下等价写法：
-  ① A LEFT JOIN B ... UNION ... B LEFT JOIN A ... WHERE A.键 IS NULL（补集写法）；
-  ② 若不需要保留无匹配的行，直接用 LEFT JOIN 或 INNER JOIN + COALESCE 兜底。
-  你不确定某个语法 MySQL 是否支持时，一律退回到 JOIN + UNION 的基础组合。
-- 字段合法性：不要输出 Schema 中不存在的字段；如果问题里出现未建模维度，优先回退到产品线、区域、客户、月份等已有维度
-"""
-
-_indicator_knowledge = IndicatorKnowledge()
-# ==================== Prompt 构造函数 ====================
 
 def build_prompt(
     user_question: str,
     use_few_shot: bool = True,
     use_rules: bool = False,
     use_guards: bool = False,
-    indicator_knowledge:  str = "",
-    use_schema_linking: bool = False,
+    indicator_knowledge: str = "",
     history: str = "",
+    schema_text: str | None = None,
+    rules_text: str | None = None,
+    guards_text: str | None = None,
+    examples_text: str | None = None,
 ) -> tuple[str, str]:
-    """
-    构造发送给 LLM 的 Prompt
-
-    Args:
-        user_question: 用户的自然语言问题
-        use_few_shot: 是否使用 Few-shot 示例
-        use_rules: 是否注入业务规则层
-        use_guards: 是否注入错误防护层
-        indicator_knowledge: 指标知识文本块
-        use_schema_linking: 是否使用动态 Schema Linking
-                           为 True 时调用 schema_linker 动态生成精简 Schema，
-                           失败时自动回退到全量 Schema。
-        history: 已渲染好的对话历史文本块；为空表示无历史（单轮查询）。
-                 只含历史问题与 SQL，不含结果数据。
-    Returns:
-        (system_message, user_message)
-        :param use_indicators:
-    """
-
-    system_msg = "你是一个专业的 SQL 生成助手，擅长根据业务问题生成标准 MySQL 查询语句。"
-
-    if use_rules or use_guards:
-        system_msg = "你是一个专业的 SQL 生成助手，擅长根据业务问题生成标准 MySQL 查询语句。请严格遵守给定的业务规则，避免常见错误。"
-
-    # 动态 Schema Linking（失败时自动回退全量 Schema）
-    schema_text = SCHEMA
-    if use_schema_linking:
-        try:
-            from chatbi.retrieval.schema_linker import build_dynamic_prompt_schema
-            dynamic_schema = build_dynamic_prompt_schema(user_question)
-            if dynamic_schema:
-                schema_text = dynamic_schema
-        except Exception:
-            pass  # 回退到全量 SCHEMA
-
-    prompt = f"""【数据库Schema】
-    {schema_text}
-    """
-
-    if use_rules:
-        prompt += f"""
-{RULES}
-"""
-
-    if use_few_shot:
-        prompt += f"""
-【示例】
-{FEW_SHOT_EXAMPLES}
-"""
-
-    if use_guards:
-        prompt += f"""
-{ERROR_GUARDS}
-"""
-
+    """没有填写的业务内容直接跳过，不回退到内置规则或示例。"""
+    if not schema_text or not schema_text.strip():
+        raise ValueError("当前数据源没有可用的数据库结构")
+    sections = [f"【数据库Schema】\n{schema_text}"]
+    if use_rules and rules_text and rules_text.strip():
+        sections.append(rules_text.strip())
+    if use_guards and guards_text and guards_text.strip():
+        sections.append(guards_text.strip())
+    if use_few_shot and examples_text and examples_text.strip():
+        sections.append(f"【示例】\n{examples_text.strip()}")
     if indicator_knowledge:
-        prompt += f"""
-    {indicator_knowledge}
-    """
-
+        sections.append(indicator_knowledge)
     if history:
-        prompt += f"""
-【对话历史】
+        sections.append(f"""【对话历史】
 {history}
 
 以上是本会话此前的问答记录。若当前问题包含「那」「这个」「刚才」等指代，
 请先结合历史理解其真实含义，再生成 SQL。
-当前问题明确给出的时间和范围优先；若要求「所有」「全部」，不要继承历史中的时间筛选。
-"""
-
-    prompt += f"""
-【用户问题】
-{user_question}
-
-【要求】
-
-1. 只输出 SQL 语句，不需要解释
-2. 只使用 MySQL 8 支持的语法：禁止 FULL OUTER JOIN / FULL JOIN / EXCEPT / INTERSECT
-   （MySQL 不支持，会直接报语法错误）；合并两个结果集用 LEFT JOIN、UNION 与
-   COALESCE 组合实现
-3. 确保字段名和表名与 Schema 一致
-4. 如果涉及多表查询，使用 JOIN 连接
-5. 收入口径统一使用 net_amount，成本口径使用 material_cost + labor_cost
-6. 统计销售额时，LEFT JOIN 汇率表；人民币直接计入，外币按订单日期和币种的有效汇率转换为人民币，不得将缺失外币汇率默认补成 0 或 1
-   使用 CASE WHEN o.currency = 'CNY' THEN 1 ELSE r.rate_to_cny END
-7. SQL 必须完整闭合，CTE、SELECT、GROUP BY、ORDER BY 不得省略，不要输出截断的半句 SQL
-8. 执行层只支持普通聚合、INNER/LEFT JOIN、非相关子查询、非递归 CTE 和 UNION；
-   不要生成窗口函数、相关子查询或 RIGHT/FULL/CROSS JOIN。多表查询的字段应写明表别名；
-   优先使用 COUNT、SUM、AVG、MIN、MAX、ROUND、COALESCE、IFNULL、NULLIF、
-   DATE_FORMAT、DATE_SUB、CURDATE 等已支持的函数；自定义顺序可用 FIELD(列, 常量...)
-"""
-
-    if use_rules or use_guards:
-        prompt += """9. 优先遵循【关键业务规则】和【常见错误防护】中的约束"""
-
-    prompt += """
-请直接输出 SQL：
-"""
-
-    return system_msg, prompt
+当前问题明确给出的时间和范围优先；若要求「所有」「全部」，不要继承历史中的时间筛选。""")
+    technical_requirements = "\n".join(f"{number}. {text}" for number, text in enumerate(QUERY_REQUIREMENTS, 1))
+    sections.extend([f"【要求】\n{technical_requirements}", f"【用户问题】\n{user_question}", "请直接输出 SQL："])
+    return SYSTEM_PROMPT, "\n\n".join(sections)

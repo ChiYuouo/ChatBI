@@ -20,6 +20,7 @@ from chatbi.core.security import QuerySecurityManager, UserContext
 from chatbi.contracts.execution import ExecutionContext, QueryExecutionResult
 from chatbi.execution.query_executor import QueryExecutor
 from chatbi.execution.budget import BudgetExceeded, ExecutionBudget, ExecutionLimits
+from chatbi.infrastructure.database_schema import read_schema
 
 logger = logging.getLogger("chatbi.database")
 
@@ -151,11 +152,14 @@ class DatabaseClient:
         connection_pool: DatabaseConnectionPool | None = None,
         runtime_config: dict[str, Any] | None = None,
         limits: ExecutionLimits | None = None,
+        schema: dict[str, dict[str, str]] | None = None,
     ):
         runtime_config = DB_RUNTIME_CONFIG if runtime_config is None else runtime_config
         self.limits = limits or ExecutionLimits.from_config(runtime_config)
         self.source_id = source_id or APP_CONFIG["database"]["default_source"]
         self.config = db_config or get_database_source_config(self.source_id)
+        # 可信调用方可注入已读取的结构；未提供时由执行器在物理表查询前读取。
+        self.schema = schema
         self.security = security_manager or QuerySecurityManager()
         self.time_fn = time_fn or perf_counter
         self.slow_query_threshold_ms = (
@@ -283,6 +287,29 @@ class DatabaseClient:
         if isinstance(conn, pymysql.connections.Connection):
             conn._read_timeout = remaining
             conn._write_timeout = remaining
+
+    def describe_schema(self, budget: ExecutionBudget | None = None) -> list[dict]:
+        """查询当前结构；提示词和执行校验使用同一份实时元数据。"""
+        budget = budget or ExecutionBudget(self.limits)
+        budget.remaining()
+        conn = None
+        reusable = False
+        try:
+            conn = self._acquire_connection(timeout=budget.remaining())
+            self._set_socket_timeout(conn, budget, self.limits.sql_timeout_ms)
+            metadata = read_schema(conn, self.config["database"], budget)
+            budget.remaining()
+            self.schema = {table["table_name"]: {column["name"]: column["type"] for column in table["columns"]}
+                           for table in metadata}
+            reusable = True
+            return metadata
+        except BudgetExceeded:
+            raise
+        except Exception as exc:
+            raise QueryExecutionError("schema_error", "无法读取当前数据源结构，请检查连接与数据库权限") from exc
+        finally:
+            if conn is not None:
+                self._release_connection(conn, reusable=reusable)
 
     def validate_connection(self) -> bool:
         try:

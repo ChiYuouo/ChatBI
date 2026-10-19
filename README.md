@@ -10,7 +10,7 @@ Python 3.12 · FastAPI · MySQL · SQLite · ChromaDB · OpenAI 兼容 API · Re
 
 - **自然语言查询**：将业务问题转为 SQL，支持流式展示生成过程、结果表格和会话追问。
 - **归因分析**：拆解复杂问题、执行多个子查询，并汇总分析结论。
-- **业务知识检索**：按需检索 Schema、指标定义和示例，辅助 SQL 生成。
+- **业务知识检索**：从当前数据库读取 Schema，结合指标定义和配置的示例生成 SQL。
 - **数据访问控制**：登录鉴权、SQL 结构与表/字段校验、角色权限和区域过滤；敏感字段在执行前拒绝访问。
 - **Web 工作台**：集中管理会话、查看 SQL、查询结果与分析报告。
 
@@ -60,7 +60,7 @@ uv run python -m chatbi.tools.demo_data --apply
 
 首次初始化会运行 `02-reader.sh`，为分析账户仅授予五张演示表的 SELECT 权限；后端使用 reader，管理密码不会传给后端。
 
-启用 Schema Linking 或指标 RAG 时，`index-init` 会在后端启动前准备对应的表/字段/指标索引，首次会调用配置的 Embedding 服务。定义或 Embedding 模型/地址变化会触发重建；版本有效时跳过远程调用。索引保存到 `chatbi-index-data` 卷，镜像构建不需要本机 `chroma_db`。`index-init` 是一次性任务，成功后以退出码 0 结束是正常状态。检索全部关闭时不创建索引，也不调用 Embedding。
+启用指标 RAG 时，`index-init` 会在后端启动前准备指标索引，首次会调用配置的 Embedding 服务。定义或 Embedding 模型/地址变化会触发重建；版本有效时跳过远程调用。索引保存到 `chatbi-index-data` 卷，镜像构建不需要本机 `chroma_db`。`index-init` 是一次性任务，成功后以退出码 0 结束是正常状态。检索全部关闭时不创建索引，也不调用 Embedding。
 
 初始化失败时查看 `docker compose logs index-init`，修正配置后重新启动。也可以单独准备或检查索引：
 

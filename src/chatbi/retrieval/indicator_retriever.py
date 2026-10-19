@@ -121,19 +121,22 @@ def retrieve_indicators(
             "sql_template": ind.get("sql_template", ""),
             "data_source": ind.get("data_source", ""),
             "depends_on": ind.get("depends_on", []),
+            "filters": ind.get("filters", []),
             "notes": ind.get("notes", ""),
             "is_dependency": False,
         })
 
     # 3. 自动展开依赖指标
     if expand_dependencies:
-        deps_to_add = set()
+        deps_to_add = []
         for item in matched:
             for dep_name in item["depends_on"]:
                 if dep_name not in matched_names:
-                    deps_to_add.add(dep_name)
+                    deps_to_add.append(dep_name)
 
         for dep_name in deps_to_add:
+            if dep_name in matched_names:
+                continue
             ind = indicators_db.get(dep_name)
             if ind:
                 matched_names.add(dep_name)
@@ -146,9 +149,12 @@ def retrieve_indicators(
                     "sql_template": ind.get("sql_template", ""),
                     "data_source": ind.get("data_source", ""),
                     "depends_on": ind.get("depends_on", []),
+                    "filters": ind.get("filters", []),
                     "notes": ind.get("notes", ""),
                     "is_dependency": True,
                 })
+                # 遍历待处理列表时继续展开，保证多层依赖都进入指标上下文。
+                deps_to_add.extend(name for name in ind.get("depends_on", []) if name not in matched_names)
 
     return matched
 
@@ -171,6 +177,8 @@ def build_indicator_knowledge_block_from_results(indicators: list[dict]) -> str:
         if ind["notes"]:
             note = ind["notes"].lstrip("注意：").lstrip("注意:").strip()
             lines.append(f"  注意：{note}")
+        if ind.get("filters"):
+            lines.append(f"  强制过滤：{' AND '.join(ind['filters'])}")
         if ind["sql_template"] and not ind["sql_template"].startswith("需"):
             lines.append(f"  SQL参考：{ind['sql_template']}")
         blocks.append("\n".join(lines))

@@ -12,6 +12,10 @@ class SQLGenerationError(SecurityError):
     """模型生成了不完整或暂不支持的查询，可在重新校验后改写。"""
 
 
+class SchemaRequiredError(SecurityError):
+    """查询包含物理表，执行器必须先提供当前数据源的可信元数据。"""
+
+
 @dataclass(slots=True)
 class UserContext:
     """当前请求身份，只能由可信调用方提供。"""
@@ -21,6 +25,8 @@ class UserContext:
     region: str | None = None
     allowed_regions: list[str] = field(default_factory=list)
     trace_id: str | None = None
+    # 数据源授权后的可访问表；None 表示使用数据源读取权限和角色策略。
+    allowed_tables: list[str] | None = None
 
     @classmethod
     def demo_admin(cls) -> UserContext:
@@ -32,6 +38,7 @@ class UserContext:
 class SecurityPolicy:
     denied_columns: frozenset[str] = frozenset()
     denied_tables: frozenset[str] = frozenset()
+    allowed_tables: frozenset[str] | None = None
 
 
 class QuerySecurityManager:
@@ -45,6 +52,9 @@ class QuerySecurityManager:
             "admin": SecurityPolicy(),
             "finance": SecurityPolicy(denied_columns=frozenset({"customer_phone", "customer_email"})),
             "sales": SecurityPolicy(
+                # 旧销售角色仅开放已配置区域隔离的业务表和公共维表。
+                # 这是角色授权范围，不是数据库结构；字段始终从当前数据源读取。
+                allowed_tables=frozenset({"sales_orders", "dim_customers", "dim_products", "exchange_rates"}),
                 denied_tables=frozenset({"finance_expenses"}),
                 denied_columns=frozenset({
                     "customer_phone", "customer_email", "gross_amount", "net_amount",
@@ -63,9 +73,10 @@ class QuerySecurityManager:
             raise SecurityError("销售角色缺少区域权限信息。")
         return user
 
-    def secure_sql(self, sql: str, user: UserContext | None = None) -> str:
+    def secure_sql(self, sql: str, user: UserContext | None = None, schema: dict | None = None) -> str:
         user = self.require_user(user)
-        return self.sql_policy.secure(sql, user, self.role_policies[user.role.lower()])
+        return self.sql_policy.secure(sql, user, self.role_policies[user.role.lower()], schema=schema,
+                                      allowed_tables=user.allowed_tables)
 
     def mask_result(
         self, columns: list[str], rows: Iterable[tuple | list], user: UserContext | None = None,

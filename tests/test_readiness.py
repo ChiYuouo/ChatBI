@@ -14,16 +14,19 @@ def test_database_failure_is_not_reported_healthy(anonymous_client, monkeypatch,
     assert response.json()["status"] == ("ok" if connected else "degraded")
 
 
-def test_missing_index_is_not_ready_and_health_does_not_create_it(anonymous_client, tmp_path, monkeypatch):
+def test_schema_index_can_be_prepared_lazily_and_health_does_not_create_it(anonymous_client, tmp_path, monkeypatch):
     monkeypatch.setattr(routes.system, "_get_runtime", lambda: SimpleNamespace(db=SimpleNamespace(validate_connection=lambda: True)))
     monkeypatch.setitem(routes.APP_CONFIG["features"], "schema_linking", True)
     index_root = tmp_path / "indexes"
     monkeypatch.setattr(index_manager, "CHROMA_ROOT", index_root)
+    from chatbi.retrieval import schema_index
+    monkeypatch.setattr(schema_index, "CHROMA_ROOT", index_root)
     response = anonymous_client.get("/health")
-    assert response.status_code == 503
+    assert response.status_code == 200
     assert response.json()["database_connected"]
-    assert not response.json()["retrieval_ready"]
-    assert response.json()["indexes"]["tables"]["status"] == "missing"
+    assert response.json()["retrieval_ready"]
+    assert response.json()["indexes"]["schema"]["status"] == "missing"
+    assert response.json()["indexes"]["schema"]["fallback"] == "current_full_schema"
     assert not index_root.exists()
 
 
@@ -40,7 +43,7 @@ def test_missing_indexes_fail_before_remote_model_or_query(stream, monkeypatch, 
                               parser=None, formatter=None, indicator_knowledge=None)
     system = ChatBISystem(runtime=runtime, app_config={"features": {}})
     monkeypatch.setattr(index_manager, "CHROMA_ROOT", tmp_path)
-    options = {"security_context": UserContext.demo_admin(), "use_schema_linking": True}
+    options = {"security_context": UserContext.demo_admin(), "use_indicator_rag": True}
     if stream:
         events = list(system.run_stream_events("订单数量", **options))
         assert dict(events)["error"]["error_type"] == "retrieval_not_ready"
@@ -53,8 +56,8 @@ def test_analysis_none_override_keeps_feature_configuration_before_creating_runt
     from chatbi.core.security import UserContext
     def unexpected_runtime(*args, **kwargs):
         raise AssertionError("未就绪前不应创建模型运行时")
-    service = AnalysisService(app_config={"features": {"schema_linking": True}}, runtime_factory=unexpected_runtime)
+    service = AnalysisService(app_config={"features": {"indicator_rag": True}}, runtime_factory=unexpected_runtime)
     monkeypatch.setattr(index_manager, "CHROMA_ROOT", tmp_path)
     events = list(service.run_stream_events("统计订单", security_context=UserContext.demo_admin(),
-        chatbi_run_options={"use_schema_linking": None}))
+        chatbi_run_options={"use_indicator_rag": None}))
     assert dict(events)["error"]["error_type"] == "retrieval_not_ready"
