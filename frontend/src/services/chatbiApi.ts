@@ -93,6 +93,58 @@ export interface AuthUser {
   region: string | null;
 }
 
+export interface DataSourceSummary {
+  source_id: string;
+  name: string;
+  enabled: boolean;
+  config_version: number;
+  is_default?: boolean;
+}
+
+export interface DataSourceConnection {
+  host: string;
+  port: number;
+  database: string;
+  user: string;
+  password: string;
+}
+
+export async function listDataSources(): Promise<DataSourceSummary[]> {
+  const response = await authedFetch(`${getApiBaseUrl()}/api/v1/data-sources`);
+  if (!response.ok) throw new Error(await readErrorMessage(response));
+  return (await response.json()).data_sources || [];
+}
+
+export async function createDataSource(payload: DataSourceConnection & { name: string }): Promise<DataSourceSummary> {
+  const response = await authedFetch(`${getApiBaseUrl()}/api/v1/data-sources`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(await readErrorMessage(response));
+  return response.json();
+}
+
+export async function testUnsavedDataSource(payload: DataSourceConnection): Promise<{ success: boolean; visible_tables: number }> {
+  const response = await authedFetch(`${getApiBaseUrl()}/api/v1/data-sources/test-connection`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(await readErrorMessage(response));
+  return response.json();
+}
+
+export async function getDataSourceKnowledge(sourceId: string): Promise<Record<string, any>> {
+  const response = await authedFetch(`${getApiBaseUrl()}/api/v1/data-sources/${encodeURIComponent(sourceId)}/knowledge`);
+  if (!response.ok) throw new Error(await readErrorMessage(response));
+  return (await response.json()).knowledge || {};
+}
+
+export async function saveDataSourceKnowledge(sourceId: string, knowledge: Record<string, any>): Promise<Record<string, any>> {
+  const response = await authedFetch(`${getApiBaseUrl()}/api/v1/data-sources/${encodeURIComponent(sourceId)}/knowledge`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ knowledge }),
+  });
+  if (!response.ok) throw new Error(await readErrorMessage(response));
+  return (await response.json()).knowledge;
+}
+
 /** 登录已过期（后端 401），token 已被清除，需要回到登录页 */
 export class UnauthorizedError extends Error {
   constructor() {
@@ -214,20 +266,23 @@ function createSessionId(): string {
  * 隐私模式等 storage 不可用时退化为进程内临时 ID —— 刷新会丢上下文，
  * 但不影响查询本身。
  */
-let fallbackSessionId = '';
+const fallbackSessionIds = new Map<string, string>();
 
-export function getOrCreateSessionId(): string {
+function sessionKey(sourceId?: string): string { return sourceId ? `${SESSION_STORAGE_KEY}:${sourceId}` : SESSION_STORAGE_KEY; }
+
+export function getOrCreateSessionId(sourceId?: string): string {
   try {
-    const existing = sessionStorage.getItem(SESSION_STORAGE_KEY);
+    const existing = sessionStorage.getItem(sessionKey(sourceId));
     if (existing) return existing;
     const created = createSessionId();
-    sessionStorage.setItem(SESSION_STORAGE_KEY, created);
+    sessionStorage.setItem(sessionKey(sourceId), created);
     return created;
   } catch {
-    if (!fallbackSessionId) {
-      fallbackSessionId = createSessionId();
+    const key = sessionKey(sourceId);
+    if (!fallbackSessionIds.has(key)) {
+      fallbackSessionIds.set(key, createSessionId());
     }
-    return fallbackSessionId;
+    return fallbackSessionIds.get(key)!;
   }
 }
 
@@ -237,21 +292,21 @@ export function getOrCreateSessionId(): string {
  * 注意：只重置前端标识还不够 —— 后端的历史是按 session_id 存的，
  * 换了 ID 才会让后端的上下文也从头开始。
  */
-export function resetSessionId(): void {
+export function resetSessionId(sourceId?: string): void {
   try {
-    sessionStorage.removeItem(SESSION_STORAGE_KEY);
+    sessionStorage.removeItem(sessionKey(sourceId));
   } catch {
     /* storage 不可用时清掉内存兜底值即可 */
   }
-  fallbackSessionId = '';
+  fallbackSessionIds.delete(sessionKey(sourceId));
 }
 
 /** 读取当前会话标识；不存在时返回 null（不会创建新的） */
-export function peekSessionId(): string | null {
+export function peekSessionId(sourceId?: string): string | null {
   try {
-    return sessionStorage.getItem(SESSION_STORAGE_KEY);
+    return sessionStorage.getItem(sessionKey(sourceId));
   } catch {
-    return fallbackSessionId || null;
+    return fallbackSessionIds.get(sessionKey(sourceId)) || null;
   }
 }
 
@@ -262,11 +317,11 @@ export function peekSessionId(): string | null {
  * 旧查询记录（含 SQL）会一直留在磁盘上，用户以为清了其实还在。
  * 删除失败一律忽略 —— 不能因为它阻断本地的重置动作。
  */
-export async function clearSessionHistory(sessionId: string): Promise<number> {
+export async function clearSessionHistory(sessionId: string, sourceId?: string): Promise<number> {
   const apiBase = getApiBaseUrl();
   try {
     const response = await authedFetch(
-      `${apiBase}/api/v1/session/${encodeURIComponent(sessionId)}`,
+      `${apiBase}/api/v1/session/${encodeURIComponent(sessionId)}?source_id=${encodeURIComponent(sourceId || '')}`,
       { method: 'DELETE' }
     );
     if (!response.ok) return 0;
@@ -278,11 +333,11 @@ export async function clearSessionHistory(sessionId: string): Promise<number> {
 }
 
 /** 显式设置当前活跃会话（侧边栏切换时用） */
-export function setActiveSessionId(id: string): void {
+export function setActiveSessionId(id: string, sourceId?: string): void {
   try {
-    sessionStorage.setItem(SESSION_STORAGE_KEY, id);
+    sessionStorage.setItem(sessionKey(sourceId), id);
   } catch {
-    fallbackSessionId = id;
+    fallbackSessionIds.set(sessionKey(sourceId), id);
   }
 }
 
@@ -368,10 +423,10 @@ export function parseReportMarkdown(markdown: string): AnalysisReport {
 }
 
 /** 当前登录用户的全部会话，按最后活动倒序 */
-export async function listSessions(): Promise<SessionSummary[]> {
+export async function listSessions(sourceId?: string): Promise<SessionSummary[]> {
   const apiBase = getApiBaseUrl();
   try {
-    const response = await authedFetch(`${apiBase}/api/v1/sessions`);
+    const response = await authedFetch(`${apiBase}/api/v1/sessions${sourceId ? `?source_id=${encodeURIComponent(sourceId)}` : ''}`);
     if (!response.ok) return [];
     const data = await response.json();
     return data.sessions || [];
@@ -381,11 +436,11 @@ export async function listSessions(): Promise<SessionSummary[]> {
 }
 
 /** 某会话的全部轮次（时间正序），用于切换会话时回填历史 */
-export async function fetchSessionTurns(sessionId: string): Promise<SessionTurn[]> {
+export async function fetchSessionTurns(sessionId: string, sourceId?: string): Promise<SessionTurn[]> {
   const apiBase = getApiBaseUrl();
   try {
     const response = await authedFetch(
-      `${apiBase}/api/v1/session/${encodeURIComponent(sessionId)}/turns`
+      `${apiBase}/api/v1/session/${encodeURIComponent(sessionId)}/turns${sourceId ? `?source_id=${encodeURIComponent(sourceId)}` : ''}`
     );
     if (!response.ok) return [];
     const data = await response.json();
@@ -398,7 +453,8 @@ export async function fetchSessionTurns(sessionId: string): Promise<SessionTurn[
 export async function executeStreamQuery(
   question: string,
   callbacks: StreamCallbacks,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  sourceId?: string
 ): Promise<void> {
   const apiBase = getApiBaseUrl();
   const startTime = performance.now();
@@ -411,7 +467,7 @@ export async function executeStreamQuery(
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ question, session_id: getOrCreateSessionId() }),
+      body: JSON.stringify({ question, session_id: getOrCreateSessionId(sourceId), source_id: sourceId }),
       signal,
     });
 
@@ -502,7 +558,7 @@ export interface AnalyzeStreamCallbacks {
 export async function executeAnalyzeStream(
   question: string,
   callbacks: AnalyzeStreamCallbacks,
-  options?: { maxSteps?: number; signal?: AbortSignal }
+  options?: { maxSteps?: number; signal?: AbortSignal; sourceId?: string }
 ): Promise<void> {
   const apiBase = getApiBaseUrl();
 
@@ -515,8 +571,9 @@ export async function executeAnalyzeStream(
       body: JSON.stringify({
         question,
         // 归因结果也要进会话历史（后端完成后落一条：问题 + 关键 SQL + 结论）
-        session_id: getOrCreateSessionId(),
+        session_id: getOrCreateSessionId(options?.sourceId),
         ...(options?.maxSteps ? { max_steps: options.maxSteps } : {}),
+        ...(options?.sourceId ? { source_id: options.sourceId } : {}),
       }),
       signal: options?.signal,
     });

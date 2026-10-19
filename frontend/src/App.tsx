@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { ConfigProvider, App as AntdApp, theme, message } from 'antd';
+import { ConfigProvider, App as AntdApp, theme, message, Select } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { XProvider } from '@ant-design/x';
 import { Header } from './components/Header';
 import { LoginPage } from './components/LoginPage';
 import { UserAuthorizationPage } from './components/UserAuthorizationPage';
+import { DataSourceManagementPage } from './components/DataSourceManagementPage';
 import { SessionSidebar } from './components/SessionSidebar';
 import { QueryInputBar } from './components/QueryInputBar';
 import { QueryCard } from './components/QueryCard';
@@ -28,6 +29,7 @@ import {
   parseReportMarkdown,
   getToken,
   listSessions,
+  listDataSources,
   peekSessionId,
   resetSessionId,
   setActiveSessionId,
@@ -35,6 +37,7 @@ import {
   AuthUser,
   fetchCurrentUser,
   UnauthorizedError,
+  DataSourceSummary,
 } from './services/chatbiApi';
 import './App.css';
 
@@ -154,14 +157,16 @@ interface MainContentProps {
 }
 
 export const MainContent: React.FC<MainContentProps> = ({ onUnauthorized, onLogout, user }) => {
-  const [view, setView] = useState<'analysis' | 'users'>('analysis');
+  const [view, setView] = useState<'analysis' | 'users' | 'sources'>('analysis');
+  const [dataSources, setDataSources] = useState<DataSourceSummary[]>([]);
+  const [sourceId, setSourceId] = useState(() => sessionStorage.getItem('chatbi_source_id') || '');
   const [inputQuestion, setInputQuestion] = useState('');
   const [mode, setMode] = useState<QueryMode>('query');
   const [loading, setLoading] = useState(false);
   const [feed, setFeed] = useState<FeedItem[]>(loadPersistedFeed);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [activeSessionId, setActiveSessionIdState] = useState<string | null>(() =>
-    peekSessionId()
+    peekSessionId(sessionStorage.getItem('chatbi_source_id') || undefined)
   );
   const [health, setHealth] = useState<HealthState>({
     status: 'checking',
@@ -182,6 +187,22 @@ export const MainContent: React.FC<MainContentProps> = ({ onUnauthorized, onLogo
     return () => clearInterval(interval);
   }, [loadHealth]);
 
+  useEffect(() => {
+    listDataSources().then((items) => {
+      setDataSources(items);
+      const chosen = sourceId && items.some((item) => item.source_id === sourceId)
+        ? sourceId : items.find((item) => item.is_default)?.source_id || items[0]?.source_id || '';
+      if (chosen !== sourceId) {
+        setActiveSessionIdState(peekSessionId(chosen));
+        setFeed([]);
+        clearPersistedFeed();
+      }
+      setSourceId(chosen);
+      sessionStorage.setItem('chatbi_source_id', chosen);
+      void listSessions(chosen).then(setSessions).catch((error) => message.error(error.message));
+    }).catch((error) => message.error(error.message));
+  }, []);
+
   // 对话记录持久化：刷新后仍能看到历史。
   // debounce 300ms —— 流式过程中 setFeed 会被高频调用，不能每次都写 storage。
   useEffect(() => {
@@ -191,12 +212,22 @@ export const MainContent: React.FC<MainContentProps> = ({ onUnauthorized, onLogo
 
   // 拉取当前登录用户的会话列表（侧边栏数据源）
   const loadSessions = useCallback(async () => {
-    setSessions(await listSessions());
-  }, []);
+    setSessions(await listSessions(sourceId || undefined));
+  }, [sourceId]);
 
   useEffect(() => {
     loadSessions();
   }, [loadSessions]);
+
+  const changeSource = (next: string) => {
+    if (loading && abortControllerRef.current) abortControllerRef.current.abort();
+    setSourceId(next);
+    sessionStorage.setItem('chatbi_source_id', next);
+    clearPersistedFeed();
+    setFeed([]);
+    setActiveSessionIdState(peekSessionId(next));
+    void listSessions(next).then(setSessions).catch((error) => message.error(error.message));
+  };
 
   /** 更新指定归因记录 */
   const patchAnalysis = useCallback(
@@ -336,7 +367,8 @@ export const MainContent: React.FC<MainContentProps> = ({ onUnauthorized, onLogo
             );
           },
         },
-        abortCtrl.signal
+        abortCtrl.signal,
+        sourceId || undefined
       );
     } catch (err: any) {
       if (err.name === 'AbortError') {
@@ -520,7 +552,7 @@ export const MainContent: React.FC<MainContentProps> = ({ onUnauthorized, onLogo
             }));
           },
         },
-        { signal: abortCtrl.signal }
+        { signal: abortCtrl.signal, sourceId: sourceId || undefined }
       );
     } catch (err: any) {
       if (err.name === 'AbortError') {
@@ -548,6 +580,10 @@ export const MainContent: React.FC<MainContentProps> = ({ onUnauthorized, onLogo
   const handleSubmit = (question: string) => {
     if (!question.trim() || loading) return;
     if (mode === 'analyze') {
+      if (!dataSources.find((item) => item.source_id === sourceId)?.is_default) {
+        message.info('当前动态数据源暂不支持归因分析，请切换到基础查询模式');
+        return;
+      }
       handleAnalyze(question);
     } else {
       handleQuery(question);
@@ -585,7 +621,7 @@ export const MainContent: React.FC<MainContentProps> = ({ onUnauthorized, onLogo
   const handleNewSession = () => {
     // 「新会话」只是离开当前对话 —— 会话原样保留在侧边栏里，
     // 删除走列表项的删除按钮（带二次确认）。多会话并存是它的语义前提。
-    resetSessionId();
+    resetSessionId(sourceId || undefined);
     clearPersistedFeed();
     setFeed([]);
     setInputQuestion('');
@@ -596,14 +632,14 @@ export const MainContent: React.FC<MainContentProps> = ({ onUnauthorized, onLogo
   /** 从侧边栏切换到某个历史会话：回填记录并切换上下文 */
   const handleSelectSession = useCallback(
     async (sessionId: string) => {
-      if (sessionId === peekSessionId()) return;
+      if (sessionId === peekSessionId(sourceId || undefined)) return;
       // 有查询正在跑就先取消 —— 否则结果会写进已切走的会话界面
       if (loading && abortControllerRef.current) {
         abortControllerRef.current.abort();
         setLoading(false);
       }
-      const turns = await fetchSessionTurns(sessionId);
-      setActiveSessionId(sessionId);
+      const turns = await fetchSessionTurns(sessionId, sourceId || undefined);
+      setActiveSessionId(sessionId, sourceId || undefined);
       setActiveSessionIdState(sessionId);
       // 接口按时间正序返回，feed 渲染最新在前 → 反转。
       // 带回答文本的是归因轮次：还原成归因卡片渲染报告；普通查询照旧走查询卡片。
@@ -639,17 +675,17 @@ export const MainContent: React.FC<MainContentProps> = ({ onUnauthorized, onLogo
       setFeed(items);
       setInputQuestion('');
     },
-    [loading]
+    [loading, sourceId]
   );
 
   /** 删除某个历史会话；删的是当前会话时自动切到全新会话 */
   const handleDeleteSession = useCallback(
     async (sessionId: string) => {
-      await clearSessionHistory(sessionId);
+      await clearSessionHistory(sessionId, sourceId || undefined);
       await loadSessions();
-      if (sessionId === peekSessionId()) {
+      if (sessionId === peekSessionId(sourceId || undefined)) {
         // 删的是当前会话：切到全新会话，避免界面还挂着已删记录
-        resetSessionId();
+        resetSessionId(sourceId || undefined);
         clearPersistedFeed();
         setFeed([]);
         setActiveSessionIdState(null);
@@ -658,7 +694,7 @@ export const MainContent: React.FC<MainContentProps> = ({ onUnauthorized, onLogo
         message.success('已删除会话');
       }
     },
-    [loadSessions]
+    [loadSessions, sourceId]
   );
 
   const isLatestRunning = (item: FeedItem, index: number) => {
@@ -689,7 +725,9 @@ export const MainContent: React.FC<MainContentProps> = ({ onUnauthorized, onLogo
           onLogout={onLogout}
           view={view}
         />
-        {view === 'users' && user.role === 'admin' ? (
+        {view === 'sources' && user.role === 'admin' ? (
+          <DataSourceManagementPage onCreated={(source) => setDataSources((items) => [...items, source])} />
+        ) : view === 'users' && user.role === 'admin' ? (
           <UserAuthorizationPage currentUserId={user.user_id} onUnauthorized={onUnauthorized} />
         ) : (
         <main className="chatbi-main-container">
@@ -699,6 +737,13 @@ export const MainContent: React.FC<MainContentProps> = ({ onUnauthorized, onLogo
             <h1>数据工作台</h1>
             <p>提出业务问题，查看可信的数据结果与分析过程。</p>
           </div>
+          <Select
+            aria-label="选择数据源"
+            value={sourceId || undefined}
+            onChange={changeSource}
+            style={{ width: 240 }}
+            options={dataSources.filter((item) => item.enabled).map((item) => ({ value: item.source_id, label: item.name }))}
+          />
         </div>
         <QueryInputBar
           value={inputQuestion}

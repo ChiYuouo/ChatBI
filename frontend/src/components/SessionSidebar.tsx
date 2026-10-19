@@ -10,8 +10,8 @@ interface SessionSidebarProps {
   onDelete: (sessionId: string) => void;
   onNewSession: () => void;
   isAdmin: boolean;
-  view: 'analysis' | 'users';
-  onViewChange: (view: 'analysis' | 'users') => void;
+  view: 'analysis' | 'users' | 'sources';
+  onViewChange: (view: 'analysis' | 'users' | 'sources') => void;
 }
 
 /** 格式化「最近活动」时间为易读的相对/简短形式 */
@@ -49,6 +49,9 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
       </button>
       {isAdmin && <button className={`sidebar-nav-item${view === 'users' ? ' sidebar-nav-active' : ''}`} onClick={() => onViewChange('users')}>
         <TeamOutlined /> 用户授权
+      </button>}
+      {isAdmin && <button className={`sidebar-nav-item${view === 'sources' ? ' sidebar-nav-active' : ''}`} onClick={() => onViewChange('sources')}>
+        <DatabaseOutlined /> 数据源管理
       </button>}
       <div className="sidebar-section-label sidebar-history-label">最近会话</div>
       <Button

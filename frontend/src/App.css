@@ -660,6 +660,12 @@ body {
 .auth-card .ant-form-item:last-child { margin-bottom: 6px; }
 .auth-form-foot { color: #a3b0b1; font-size: 11px; margin-top: 22px; }
 
+/* 数据源规则、防护与示例编辑区。 */
+.knowledge-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.knowledge-toolbar .ant-input-search { max-width: 420px; }
+.knowledge-row-link.ant-btn { padding: 0; max-width: 100%; height: auto; overflow: hidden; text-overflow: ellipsis; display: inline-block; text-align: left; vertical-align: middle; }
+.knowledge-sql-input { font-family: Consolas, monospace; tab-size: 2; }
+
 @media (max-width: 780px) {
   .auth-page { grid-template-columns: 1fr; }
   .auth-intro { min-height: 245px; padding: 26px 28px; }

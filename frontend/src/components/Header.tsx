@@ -12,7 +12,7 @@ interface HeaderProps {
   historyCount: number;
   /** 退出登录 */
   onLogout: () => void;
-  view: 'analysis' | 'users';
+  view: 'analysis' | 'users' | 'sources';
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -56,7 +56,7 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="header-location">
         <span>工作台</span>
         <span className="header-location-separator">/</span>
-        <strong>{view === 'users' ? '用户授权' : '智能分析'}</strong>
+        <strong>{view === 'users' ? '用户授权' : view === 'sources' ? '数据源管理' : '智能分析'}</strong>
       </div>
       <div className="header-actions">
         {getHealthBadge()}
